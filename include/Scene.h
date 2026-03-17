@@ -5,19 +5,41 @@
 #include "Ray.h"
 #include <vector>
 
+// Scene: Escena que contiene objetos (esferas) a renderizar.
+// 
+// Responsabilidad:
+//   - Almacenar lista de objetos (esferas).
+//   - Calcular trazado de rayos (ray tracing) contra todos los objetos.
+//   - Determinar el objeto más cercano a la cámara para cada rayo.
+// 
+// Notas:
+//   - Implementa algoritmo naive de ray tracing (complejidad O(n) por rayo).
+//   - Para futuras extensiones: agregar árboles BVH o estructuras espaciales.
 struct Scene {
-    std::vector<Sphere> spheres;
+    std::vector<Sphere> spheres;  // Lista de objetos en la escena
 
+    // Constructor que inicializa la escena con objetos de prueba.
     Scene() {
-        // Añadir algunas esferas de ejemplo
+        // Añadir esferas de ejemplo para validación
         spheres.emplace_back(Vector3(0, 0, -5), 1.0, Vector3(1, 0, 0)); // Roja
         spheres.emplace_back(Vector3(2, 0, -5), 1.0, Vector3(0, 1, 0)); // Verde
         spheres.emplace_back(Vector3(-2, 0, -5), 1.0, Vector3(0, 0, 1)); // Azul
     }
 
+    // Traza un rayo en la escena y retorna el color del objeto más cercano.
+    // 
+    // Param: ray - Rayo a trazar (origen y dirección).
+    // Return: Color del objeto intersectado (Vector3 R,G,B en [0,1]).
+    //         Si no hay intersección, retorna negro (0, 0, 0).
+    // 
+    // Algoritmo:
+    //   1. Iterar sobre todas las esferas en la escena.
+    //   2. Calcular intersección rayo-esfera.
+    //   3. Guardar la intersección más cercana (menor t).
+    //   4. Retornar color del objeto más cercano.
     Vector3 trace(const Ray& ray) const {
         double t_min = INFINITY;
-        Vector3 color(0, 0, 0); // Fondo negro
+        Vector3 color(0, 0, 0); // Fondo negro (sin intersección)
         for (const auto& sphere : spheres) {
             double t;
             if (sphere.intersect(ray, t) && t < t_min) {
@@ -28,5 +50,4 @@ struct Scene {
         return color;
     }
 };
-
 #endif // SCENE_H

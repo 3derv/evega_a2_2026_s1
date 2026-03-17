@@ -23,6 +23,9 @@ mono_crash.*
 *.txt
 build/
 results/
+
+# Documentación del proyecto (local)
+docs/instructions.md
 [Dd]ebug/
 [Dd]ebugPublic/
 [Rr]elease/
