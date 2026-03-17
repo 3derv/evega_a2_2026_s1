@@ -41,6 +41,9 @@ Para mantener el código limpio, legible y mantenible, se aplicarán los siguien
 1. Clonar el repositorio
 2. Compilar con CMake: `cmake .. && make` en build/
 3. Ejecutar: `./raytracer` para versión secuencial
+4. Para mediciones: `./raytracer --runs N` (N >= 200 recomendado)
+5. Generar gráficas: `python3 scripts/generar_graficas.py results/mediciones_secuencial.csv`
+6. Script completo: `./scripts/run_mediciones_secuencial.sh` (ejecuta 200 runs y genera gráficas)
 
 ## Metodología
 - Desarrollo incremental con Git
