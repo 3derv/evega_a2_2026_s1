@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include_directories(include)
 
-add_executable(raytracer src/main.cpp src/Runner.cpp)
+add_executable(raytracer src/main.cpp src/Runner.cpp src/Exporter.cpp)
 
 # Opcional: flags de optimización
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O2")
