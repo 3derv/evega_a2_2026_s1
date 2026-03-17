@@ -1,3 +1,4 @@
+#include "Constants.h"
 #include "Renderer.h"
 #include <iostream>
 #include <vector>
@@ -67,11 +68,11 @@ int main(int argc, char* argv[]) {
     double std_dev = std::sqrt(variance);
 
     // Guardar imagen de la última ejecución
-    save_ppm("/home/ederv/tec/p1arqui2/evega_a2_2026_s1/results/image/frame.ppm", frame, WIDTH, HEIGHT);
+    save_ppm(constants::IMAGE_FILE, frame, constants::IMAGE_WIDTH, constants::IMAGE_HEIGHT);
 
     // Guardar resultados de mediciones en CSV
-    std::filesystem::create_directories("/home/ederv/tec/p1arqui2/evega_a2_2026_s1/results");
-    std::ofstream csv_file("/home/ederv/tec/p1arqui2/evega_a2_2026_s1/results/mediciones_secuencial.csv");
+    std::filesystem::create_directories(constants::RESULTS_DIR);
+    std::ofstream csv_file(constants::CSV_FILE);
     csv_file << "Ejecucion,Tiempo(s)\n";
     for (size_t i = 0; i < times.size(); ++i) {
         csv_file << (i + 1) << "," << times[i] << "\n";
@@ -89,8 +90,8 @@ int main(int argc, char* argv[]) {
     std::cout << "Speedup (respecto a secuencial): 1.0" << std::endl;
     std::cout << "Eficiencia paralela: 1.0 (1 hilo)" << std::endl;
     std::cout << "Escalabilidad: N/A (1 hilo)" << std::endl;
-    std::cout << "Archivo de mediciones guardado en: /home/ederv/tec/p1arqui2/evega_a2_2026_s1/results/mediciones_secuencial.csv" << std::endl;
-    std::cout << "Imagen guardada en: /home/ederv/tec/p1arqui2/evega_a2_2026_s1/results/image/frame.ppm" << std::endl;
+    std::cout << "Archivo de mediciones guardado en: " << constants::CSV_FILE << std::endl;
+    std::cout << "Imagen guardada en: " << constants::IMAGE_FILE << std::endl;
 
     return 0;
 }

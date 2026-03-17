@@ -1,21 +1,19 @@
 #ifndef RENDERER_H
 #define RENDERER_H
 
+#include "Constants.h"
 #include "Scene.h"
 #include "Vector3.h"
 #include <vector>
-
-const int WIDTH = 640;
-const int HEIGHT = 480;
 
 struct Renderer {
     Scene scene;
 
     Vector3 render_pixel(int x, int y) const {
         // Coordenadas normalizadas (-1 a 1)
-        double u = (2.0 * x / WIDTH) - 1.0;
-        double v = 1.0 - (2.0 * y / HEIGHT);
-        double aspect = static_cast<double>(WIDTH) / HEIGHT;
+        double u = (2.0 * x / constants::IMAGE_WIDTH) - 1.0;
+        double v = 1.0 - (2.0 * y / constants::IMAGE_HEIGHT);
+        double aspect = static_cast<double>(constants::IMAGE_WIDTH) / constants::IMAGE_HEIGHT;
 
         // Rayo desde el origen hacia el pixel
         Vector3 origin(0, 0, 0);
@@ -26,10 +24,10 @@ struct Renderer {
     }
 
     void render_frame(std::vector<Vector3>& frame) const {
-        frame.resize(WIDTH * HEIGHT);
-        for (int y = 0; y < HEIGHT; ++y) {
-            for (int x = 0; x < WIDTH; ++x) {
-                frame[y * WIDTH + x] = render_pixel(x, y);
+        frame.resize(constants::IMAGE_WIDTH * constants::IMAGE_HEIGHT);
+        for (int y = 0; y < constants::IMAGE_HEIGHT; ++y) {
+            for (int x = 0; x < constants::IMAGE_WIDTH; ++x) {
+                frame[y * constants::IMAGE_WIDTH + x] = render_pixel(x, y);
             }
         }
     }
