@@ -25,7 +25,8 @@ struct Runner {
     // Constructor.
     // Param: runs - Número de ejecuciones a realizar (mínimo 1).
     //              Si se proporciona un valor menor que 1, se ajusta a 1.
-    explicit Runner(int runs = 1);
+    //        model - Nombre del modelo (usado por Exporter para nombres de archivos).
+    explicit Runner(int runs = 1, const std::string& model = "sequential");
 
     // Ejecuta el renderizado N veces y retorna métricas agregadas.
     // Return: Metrics con tiempos de ejecución y estadísticas.
@@ -33,6 +34,7 @@ struct Runner {
 
 private:
     int runs_;             // Número de ejecuciones a realizar
+    std::string model_;    // Nombre del modelo
     Renderer renderer_;    // Instancia del renderer de ray tracing
     Exporter exporter_;    // Instancia para guardar resultados
 

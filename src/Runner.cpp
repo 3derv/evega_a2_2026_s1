@@ -7,7 +7,8 @@
 
 namespace trace {
 
-Runner::Runner(int runs) : runs_(runs) {
+Runner::Runner(int runs, const std::string& model) 
+    : runs_(std::max(runs, 1)), model_(model), exporter_(model) {
     if (runs_ < 1) {
         runs_ = 1;
     }

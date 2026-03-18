@@ -15,6 +15,7 @@ namespace trace {
 //   - Exportar imágenes en formato PPM (Portable Pixmap).
 //   - Guardar métricas de medición en formato CSV para análisis posterior.
 //   - Manejar creación de directorios si no existen.
+//   - Soportar múltiples modelos (secuencial, fgmt, cgmt, etc.)
 // 
 // Notas:
 //   - Las rutas de guardado se definen en Constants.h para centralización.
@@ -22,8 +23,9 @@ namespace trace {
 //   - El CSV es procesable por scripts de Python/gnuplot para generar gráficas.
 class Exporter {
 public:
-    // Constructor por defecto, inicializa rutas desde constantes.
-    Exporter() = default;
+    // Constructor: inicializar con nombre de modelo para archivos específicos.
+    // Param: model - Nombre del modelo (p.ej. "sequential", "fgmt", "cgmt")
+    explicit Exporter(const std::string& model = "sequential");
 
     // Guarda el frame renderizado como imagen PPM.
     // Param: frame - Vector de colores (Vector3: R, G, B en [0, 1]).
@@ -36,8 +38,9 @@ public:
     void save_csv(const Metrics& metrics) const;
 
 private:
-    std::string image_file_ = constants::IMAGE_FILE;  // Ruta PPM
-    std::string csv_file_ = constants::CSV_FILE;      // Ruta CSV
+    std::string model_;        // Nombre del modelo
+    std::string image_file_;   // Ruta PPM específica del modelo
+    std::string csv_file_;     // Ruta CSV específica del modelo
 };
 
 } // namespace trace
