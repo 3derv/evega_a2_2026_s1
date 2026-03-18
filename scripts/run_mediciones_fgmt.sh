@@ -73,7 +73,8 @@ fi
 # 5. Generar gráficas y análisis de speed up
 echo "[5/5] Generando gráficas y análisis de speed up..."
 cd "$PROJECT_ROOT"
-python3 scripts/generar_graficas_fgmt.py "$CSV_FILE_FGMT"
+python3 scripts/generar_graficas.py "$CSV_FILE_SEQ"      # Gráficas Sequential
+python3 scripts/generar_graficas_fgmt.py "$CSV_FILE_FGMT" # Gráficas FGMT
 python3 scripts/analizar_speedup.py "$CSV_FILE_FGMT" "$CSV_FILE_SEQ"
 
 echo ""
@@ -84,7 +85,7 @@ echo ""
 echo "Resultados guardados en: $RESULTS_DIR"
 echo "  - CSV Sequential: mediciones_secuencial.csv"
 echo "  - CSV FGMT:       mediciones_fgmt.csv"
-echo "  - Gráficas:       graficas/fgmt_*.png"
+echo "  - Gráficas:       graficas/histogram*.png, boxplot*.png"
 echo "  - Imágenes:       image/frame_*.ppm"
 echo "  - Speed Up Log:   speedup_report.log"
 echo ""
