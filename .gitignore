@@ -22,6 +22,27 @@ mono_crash.*
 # Proyecto específico
 *.txt
 build/
+
+# ============================================================================
+# ARCHIVOS GENERADOS (No subirlos al repositorio)
+# ============================================================================
+
+# Imágenes renderizadas (PPM)
+results/image/
+results/image/*.ppm
+
+# Mediciones y métricas (CSV)
+results/*.csv
+results/mediciones_*.csv
+
+# Gráficas generadas
+results/graficas/
+results/graficas/*.png
+
+# Logs de análisis
+results/speedup_report.log
+
+# Directorio completo de resultados
 results/
 
 # Documentación del proyecto (local)

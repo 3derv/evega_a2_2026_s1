@@ -22,10 +22,15 @@ private:
     CacheModel cache;  // Simulador de cache para un único thread
     
 public:
-    // Constructor: inicializa la escena y cache model.
+    // Constructor: inicializa la escena y cache model
+    // El cache se configura con valor de Constants::CACHE_SIZE
     SequentialRenderer();
 
-    // Renderiza un píxel individual (sin stalls).
+    // render_pixel(): Renderiza un píxel individual sin stalls.
+    // Param: x, y - Coordenadas del píxel (0..IMAGE_WIDTH, 0..IMAGE_HEIGHT)
+    // Return: Color resultante (Vector3 R, G, B en [0, 1])
+    // Nota: Este método realiza el cálculo de ray tracing pero NO ejecuta NOPs
+    //       Los NOPs se ejecutan en render_frame() basándose en cache misses
     Vector3 render_pixel(int x, int y) const {
         double u = (2.0 * x / 640.0) - 1.0;
         double v = 1.0 - (2.0 * y / 480.0);
@@ -38,10 +43,21 @@ public:
         return scene.trace(ray);
     }
 
-    // Implementación de IRenderer::render_frame().
+    // render_frame(): Implementación de IRenderer. Renderiza frame secuencialmente.
+    // Responsabilidad:
+    //   1. Resetear cache model
+    //   2. Iterar píxeles en orden row-major (fila por fila, columna por columna)
+    //   3. Para cada píxel:
+    //      - Llamar render_pixel() para calcular color
+    //      - Consultar cache.is_cache_miss(x, y)
+    //      - Si hay miss: ejecutar NOPS_PER_STALL operaciones NOP
+    //   4. Retornar frame buffer completo
+    // Return: Vector<Vector3> con dimensiones IMAGE_WIDTH × IMAGE_HEIGHT
+    // Performance: ~12ms con cache misses (vs ~5-6ms en FGMT con 4 threads)
     std::vector<Vector3> render_frame() override;
 
-    // Implementación de IRenderer::get_model_name().
+    // get_model_name(): Retorna identificador del modelo para logging/CSV
+    // Return: String "sequential"
     std::string get_model_name() const override { return "sequential"; }
 };
 

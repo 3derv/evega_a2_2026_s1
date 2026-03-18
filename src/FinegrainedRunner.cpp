@@ -15,7 +15,10 @@ double FinegrainedRunner::run_once(std::vector<ThreadMetrics>& thread_metrics) {
     auto start = std::chrono::high_resolution_clock::now();
     
     // Ejecutar renderizado FGMT (4 threads)
-    thread_metrics = renderer_.render_frame();
+    std::vector<Vector3> frame = renderer_.render_frame();
+    
+    // Obtener métricas de threads
+    thread_metrics = renderer_.get_thread_metrics();
     
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> elapsed = end - start;

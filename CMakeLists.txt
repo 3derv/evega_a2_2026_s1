@@ -8,10 +8,9 @@ include_directories(include)
 
 add_executable(raytracer 
     src/main.cpp 
-    src/Runner.cpp 
     src/Exporter.cpp
+    src/SequentialRenderer.cpp
     src/FinegrainedRenderer.cpp
-    src/FinegrainedRunner.cpp
 )
 
 # Flags de compilación

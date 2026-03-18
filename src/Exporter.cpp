@@ -21,8 +21,8 @@ Exporter::Exporter(const std::string& model) : model_(model) {
         csv_file_ = constants::RESULTS_DIR + "/mediciones_cmp.csv";
     } else {
         // Defecto: secuencial
-        image_file_ = constants::IMAGE_FILE;  // results/image/frame.ppm
-        csv_file_ = constants::CSV_FILE;      // results/mediciones_secuencial.csv
+        image_file_ = constants::RESULTS_DIR + "/image/frame_secuencial.ppm";
+        csv_file_ = constants::RESULTS_DIR + "/mediciones_secuencial.csv";
     }
 }
 
