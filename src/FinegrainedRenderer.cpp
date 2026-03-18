@@ -54,13 +54,15 @@ void FinegrainedRenderer::render_tile_worker(int thread_id) {
         for (int x = tile.x_start; x < tile.x_end; ++x) {
             // Quantum: procesar este píxel
             
-            // 1. Normalizar coordenadas a [-1, 1]
-            double u = (2.0 * x - IMAGE_WIDTH) / IMAGE_HEIGHT;
-            double v = (2.0 * y - IMAGE_HEIGHT) / IMAGE_HEIGHT;
+            // 1. Normalizar coordenadas a [-1, 1] (MISMO QUE SEQUENTIAL)
+            double u = (2.0 * x / IMAGE_WIDTH) - 1.0;
+            double v = 1.0 - (2.0 * y / IMAGE_HEIGHT);
+            double aspect = (double)IMAGE_WIDTH / IMAGE_HEIGHT;
             
-            // 2. Crear rayo desde cámara
-            Vector3 ray_dir = Vector3(u, v, 1.0).normalize();
-            Ray ray(Vector3(0, 0, -5), ray_dir);
+            // 2. Crear rayo desde cámara (MISMO QUE SEQUENTIAL)
+            Vector3 origin(0, 0, 0);
+            Vector3 direction(u * aspect, v, -1);
+            Ray ray(origin, direction);
             
             // 3. Trazar rayo en escena
             Vector3 color = scene.trace(ray);
@@ -87,7 +89,7 @@ void FinegrainedRenderer::render_tile_worker(int thread_id) {
 }
 
 // render_frame(): Ejecutar renderizado con threads paralelos
-std::vector<ThreadMetrics> FinegrainedRenderer::render_frame() {
+std::vector<Vector3> FinegrainedRenderer::render_frame() {
     // Reiniciar cache models y estadísticas
     for (int i = 0; i < NUM_THREADS; ++i) {
         cache_models[i].reset();
@@ -107,6 +109,6 @@ std::vector<ThreadMetrics> FinegrainedRenderer::render_frame() {
         t.join();
     }
     
-    // Retornar estadísticas de todos los threads
-    return thread_stats;
+    // Retornar frame renderizado
+    return frame;
 }
