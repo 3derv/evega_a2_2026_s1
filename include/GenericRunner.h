@@ -40,21 +40,25 @@ struct GenericRunner {
         Metrics metrics;
         metrics.runs = runs_;
         metrics.times.reserve(runs_);
-        
+        metrics.virtual_times.reserve(runs_);
+
         // Ejecutar N veces
         for (int i = 0; i < runs_; ++i) {
             auto start = std::chrono::high_resolution_clock::now();
-            
+
             // Ejecutar renderizado
             std::vector<Vector3> frame = renderer_->render_frame();
-            
+
             auto end = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> elapsed = end - start;
             metrics.times.push_back(elapsed.count());
-            
-            // Guardar solo la última frame
+            metrics.virtual_times.push_back(renderer_->get_virtual_time_ns());
+            metrics.stall_counts.push_back(renderer_->get_total_stalls());
+
+            // Guardar solo la última frame y extraer thread metrics
             if (i == runs_ - 1) {
                 exporter_.save_image(frame);
+                metrics.thread_metrics = renderer_->get_thread_metrics();
             }
         }
         
@@ -70,10 +74,15 @@ struct GenericRunner {
             sum_sq_diff += (t - metrics.avg) * (t - metrics.avg);
         }
         metrics.stddev = std::sqrt(sum_sq_diff / metrics.runs);
-        
+
+        // Calcular tiempo virtual promedio
+        long long total_vt = 0LL;
+        for (long long vt : metrics.virtual_times) total_vt += vt;
+        metrics.virtual_time_ns = total_vt / metrics.runs;
+
         // Exportar CSV
         exporter_.save_csv(metrics);
-        
+
         return metrics;
     }
 

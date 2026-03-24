@@ -39,35 +39,51 @@ int main(int argc, char* argv[]) {
         std::cout << "Tiempo mínimo: " << metrics.min << " segundos" << std::endl;
         std::cout << "Tiempo máximo: " << metrics.max << " segundos" << std::endl;
         std::cout << "Desviación estándar: " << metrics.stddev << " segundos" << std::endl;
-        
+        std::cout << "Tiempo virtual (promedio): " << metrics.virtual_time_ns << " ns ("
+                  << (metrics.virtual_time_ns / 1.0e6) << " ms)" << std::endl;
+
+        // Calcular stalls promedio y CPI
+        {
+            int total_stalls_sum = 0;
+            for (int s : metrics.stall_counts) total_stalls_sum += s;
+            int avg_stalls = metrics.stall_counts.empty() ? 0
+                             : total_stalls_sum / (int)metrics.stall_counts.size();
+            int total_pixels = constants::IMAGE_WIDTH * constants::IMAGE_HEIGHT;
+            double cpi = (metrics.virtual_time_ns > 0)
+                ? (double)metrics.virtual_time_ns /
+                  ((double)constants::NOP_PENALTY_NS * (double)total_pixels)
+                : 0.0;
+            std::cout << "Stalls promedio : " << avg_stalls << std::endl;
+            std::cout << "CPI             : " << cpi << std::endl;
+        }
+
         // Mostrar estadísticas por thread si existen
         if (!metrics.thread_metrics.empty()) {
             std::cout << "\nEstadísticas por Thread:" << std::endl;
             for (const auto& tm : metrics.thread_metrics) {
                 std::cout << "  Thread " << tm.thread_id << ":" << std::endl;
-                std::cout << "    NOPs ejecutados: " << tm.nops_count << std::endl;
-                std::cout << "    Tiempo en NOPs: " << tm.nop_time_ns << " ns" << std::endl;
                 std::cout << "    Cache misses: " << tm.cache_misses << std::endl;
+                std::cout << "    Tiempo virtual: " << tm.virtual_time_ns << " ns" << std::endl;
             }
         }
         
         // Determinar nombres de archivos según el modelo
         std::string csv_file, img_file;
         if (model == "fgmt") {
-            csv_file = "results/mediciones_fgmt.csv";
-            img_file = "results/image/frame_fgmt.ppm";
+            csv_file = constants::CSV_FILE_FGMT;
+            img_file = constants::IMAGE_FILE_FGMT;
         } else if (model == "cgmt") {
-            csv_file = "results/mediciones_cgmt.csv";
-            img_file = "results/image/frame_cgmt.ppm";
+            csv_file = constants::CSV_FILE_CGMT;
+            img_file = constants::IMAGE_FILE_CGMT;
         } else if (model == "smt") {
-            csv_file = "results/mediciones_smt.csv";
-            img_file = "results/image/frame_smt.ppm";
+            csv_file = constants::CSV_FILE_SMT;
+            img_file = constants::IMAGE_FILE_SMT;
         } else if (model == "cmp") {
-            csv_file = "results/mediciones_cmp.csv";
-            img_file = "results/image/frame_cmp.ppm";
+            csv_file = constants::CSV_FILE_CMP;
+            img_file = constants::IMAGE_FILE_CMP;
         } else {
-            csv_file = constants::CSV_FILE;
-            img_file = constants::IMAGE_FILE;
+            csv_file = constants::CSV_FILE_SEQUENTIAL;
+            img_file = constants::IMAGE_FILE_SEQUENTIAL;
         }
         
         std::cout << "\nArchivo de mediciones guardado en: " << csv_file << std::endl;

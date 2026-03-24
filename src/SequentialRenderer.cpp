@@ -7,27 +7,28 @@ SequentialRenderer::SequentialRenderer() : scene(), cache(CACHE_SIZE) {}
 
 std::vector<Vector3> SequentialRenderer::render_frame() {
     std::vector<Vector3> frame(IMAGE_WIDTH * IMAGE_HEIGHT);
-    
+    virtual_time_ns_ = 0LL;
+    stall_count_ = 0;
+
     // Reiniciar cache
     cache.reset();
-    
-    // Renderizar con cache modeling y stalls
+
+    // Renderizar con reloj virtual
     for (int y = 0; y < IMAGE_HEIGHT; ++y) {
         for (int x = 0; x < IMAGE_WIDTH; ++x) {
-            // Renderizar píxel (sin stalls en el cálculo)
             frame[y * IMAGE_WIDTH + x] = render_pixel(x, y);
-            
+
+            // Quantum: tiempo base por pixel (igual en todos los modelos)
+            virtual_time_ns_ += PIXEL_QUANTUM_NS;
+
             // Simular cache behavior
             if (cache.is_cache_miss(x, y)) {
-                // Cache miss → ejecutar NOPs de penalización
-                volatile int dummy = 0;
-                for (int nop_idx = 0; nop_idx < NOPS_PER_STALL; ++nop_idx) {
-                    dummy++;  // Simulación de NOP
-                    asm volatile("nop");  // NOP arquitectural real (GCC/Clang)
-                }
+                // Cache miss: stall completo (no hay otro thread que ejecute)
+                virtual_time_ns_ += CACHE_MISS_PENALTY_NS;
+                ++stall_count_;
             }
         }
     }
-    
+
     return frame;
 }

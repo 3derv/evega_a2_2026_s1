@@ -6,29 +6,44 @@
 #include "CacheModel.h"
 #include "Metrics.h"
 #include <vector>
+#include <deque>
 #include <thread>
-#include <chrono>
+#include <mutex>
+#include <condition_variable>
 
-// FinegrainedRenderer: Renderizador FGMT con 4 threads independientes.
-// Hereda de IRenderer para permitir polimorfismo.
+// FinegrainedRenderer: Renderizador FGMT (Fine-Grained Multithreading).
+// Modela 1 pipeline compartido con 4 contextos en round-robin.
+// Diferencias clave vs CGMT:
+//   - Yield obligatorio tras CADA quantum (no solo en stall).
+//   - Pixel con stall se difiere como "prefetched"; pipeline cede al siguiente contexto.
 class FinegrainedRenderer : public IRenderer {
 private:
-    Scene scene;                                  // Escena común (read-only)
-    std::vector<Vector3> frame;                   // Frame buffer compartido (1D: ancho * alto)
-    std::vector<CacheModel> cache_models;         // 1 CacheModel por thread
-    std::vector<trace::ThreadMetrics> thread_stats; // Estadísticas per-thread
-    
-    // Rango de píxeles para cada thread (índices lineares)
+    Scene scene;
+    std::vector<Vector3>              frame;
+    std::vector<CacheModel>           cache_models;
+    std::vector<trace::ThreadMetrics> thread_stats;
+
+    // Límites del tile asignado a cada thread
     struct ThreadTile {
-        int x_start, x_end;  // Rango X
-        int y_start, y_end;  // Rango Y
+        int x_start, x_end;
+        int y_start, y_end;
         int thread_id;
     };
     std::vector<ThreadTile> tiles;
 
-    // Función worker ejecutada por cada thread
-    // Param: thread_id - Identificador del thread (0..NUM_THREADS-1)
-    // Procesa el tile asignado de píxeles, simulando cache behavior y ejecutando NOPs
+    // Cola de tareas por thread. prefetched=true → stall ya fue pagado, no reintentar cache.
+    struct PixelTask { int x, y; bool prefetched; };
+    std::vector<std::deque<PixelTask>> pixel_queues;
+
+    // Scheduler round-robin: 1 pipeline, 4 contextos
+    std::mutex              pipeline_mutex;
+    std::condition_variable pipeline_cv;
+    int                     pipeline_owner       = 0;
+    int                     active_threads_count = 0;
+    std::vector<bool>       thread_done_flags;
+
+    long long virtual_time_ns_ = 0LL;
+
     void render_tile_worker(int thread_id);
 
 public:
@@ -59,6 +74,12 @@ public:
     // get_frame(): Acceder al frame procesado (para debugging o exportación manual)
     // Return: Vector<Vector3> con píxeles completamente renderizados
     const std::vector<Vector3>& get_frame() const { return frame; }
+    long long get_virtual_time_ns() const override { return virtual_time_ns_; }
+    int get_total_stalls() const override {
+        int total = 0;
+        for (const auto& ts : thread_stats) total += ts.cache_misses;
+        return total;
+    }
 };
 
 #endif // FINEGRAINED_RENDERER_H

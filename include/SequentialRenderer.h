@@ -19,7 +19,9 @@
 class SequentialRenderer : public IRenderer {
 private:
     Scene scene;
-    CacheModel cache;  // Simulador de cache para un único thread
+    CacheModel cache;                 // Simulador de cache para un único thread
+    long long virtual_time_ns_ = 0LL; // Acumula tiempo virtual del último render_frame()
+    int stall_count_ = 0;             // Cache misses en el último render_frame()
     
 public:
     // Constructor: inicializa la escena y cache model
@@ -59,6 +61,8 @@ public:
     // get_model_name(): Retorna identificador del modelo para logging/CSV
     // Return: String "sequential"
     std::string get_model_name() const override { return "sequential"; }
+    long long get_virtual_time_ns() const override { return virtual_time_ns_; }
+    int get_total_stalls() const override { return stall_count_; }
 };
 
 #endif // SEQUENTIAL_RENDERER_H

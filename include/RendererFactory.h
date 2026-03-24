@@ -4,6 +4,7 @@
 #include "IRenderer.h"
 #include "SequentialRenderer.h"
 #include "FinegrainedRenderer.h"
+#include "CoarseRenderer.h"
 #include <memory>
 #include <string>
 #include <stdexcept>
@@ -18,7 +19,7 @@ class RendererFactory {
 public:
     // Lista de modelos soportados (para validación)
     static constexpr const char* SUPPORTED_MODELS[] = {
-        "sequential", "fgmt"
+        "sequential", "fgmt", "cgmt"
     };
 
     // Intenta crear un renderer para el modelo especificado.
@@ -29,27 +30,27 @@ public:
         } else if (model_name == "fgmt") {
             return std::make_unique<FinegrainedRenderer>();
         } else if (model_name == "cgmt") {
-            throw std::runtime_error("CGMT is still in development. Use '--model sequential' or '--model fgmt' for now.");
+            return std::make_unique<CoarseRenderer>();
         } else if (model_name == "smt") {
-            throw std::runtime_error("SMT is still in development. Use '--model sequential' or '--model fgmt' for now.");
+            throw std::runtime_error("SMT is still in development. Use '--model sequential', '--model fgmt', or '--model cgmt' for now.");
         } else if (model_name == "cmp") {
-            throw std::runtime_error("CMP is still in development. Use '--model sequential' or '--model fgmt' for now.");
+            throw std::runtime_error("CMP is still in development. Use '--model sequential', '--model fgmt', or '--model cgmt' for now.");
         } else {
-            throw std::invalid_argument("Unknown model: " + model_name + ". Available: sequential, fgmt");
+            throw std::invalid_argument("Unknown model: " + model_name + ". Available: sequential, fgmt, cgmt");
         }
     }
 
     // Verifica si un modelo está disponible.
     static bool is_available(const std::string& model_name) {
-        return model_name == "sequential" || model_name == "fgmt";
+        return model_name == "sequential" || model_name == "fgmt" || model_name == "cgmt";
     }
 
     // Retorna mensaje de ayuda con modelos disponibles.
     static std::string get_help_message() {
         return "Usage: ./raytracer [--model MODEL] [--runs N]\n"
-               "Models available: sequential, fgmt\n"
-               "Models in development: cgmt, smt, cmp\n"
-               "Example: ./raytracer --model fgmt --runs 200\n";
+               "Models available: sequential, fgmt, cgmt\n"
+               "Models in development: smt, cmp\n"
+               "Example: ./raytracer --model cgmt --runs 200\n";
     }
 };
 

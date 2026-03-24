@@ -8,21 +8,21 @@ namespace trace {
 Exporter::Exporter(const std::string& model) : model_(model) {
     // Configurar rutas basadas en el modelo
     if (model == "fgmt") {
-        image_file_ = constants::RESULTS_DIR + "/image/frame_fgmt.ppm";
-        csv_file_ = constants::RESULTS_DIR + "/mediciones_fgmt.csv";
+        image_file_ = constants::IMAGE_FILE_FGMT;
+        csv_file_   = constants::CSV_FILE_FGMT;
     } else if (model == "cgmt") {
-        image_file_ = constants::RESULTS_DIR + "/image/frame_cgmt.ppm";
-        csv_file_ = constants::RESULTS_DIR + "/mediciones_cgmt.csv";
+        image_file_ = constants::IMAGE_FILE_CGMT;
+        csv_file_   = constants::CSV_FILE_CGMT;
     } else if (model == "smt") {
-        image_file_ = constants::RESULTS_DIR + "/image/frame_smt.ppm";
-        csv_file_ = constants::RESULTS_DIR + "/mediciones_smt.csv";
+        image_file_ = constants::IMAGE_FILE_SMT;
+        csv_file_   = constants::CSV_FILE_SMT;
     } else if (model == "cmp") {
-        image_file_ = constants::RESULTS_DIR + "/image/frame_cmp.ppm";
-        csv_file_ = constants::RESULTS_DIR + "/mediciones_cmp.csv";
+        image_file_ = constants::IMAGE_FILE_CMP;
+        csv_file_   = constants::CSV_FILE_CMP;
     } else {
         // Defecto: secuencial
-        image_file_ = constants::RESULTS_DIR + "/image/frame_secuencial.ppm";
-        csv_file_ = constants::RESULTS_DIR + "/mediciones_secuencial.csv";
+        image_file_ = constants::IMAGE_FILE_SEQUENTIAL;
+        csv_file_   = constants::CSV_FILE_SEQUENTIAL;
     }
 }
 
@@ -48,9 +48,11 @@ void Exporter::save_csv(const Metrics& metrics) const {
     if (!file) {
         return;
     }
-    file << "Ejecucion,Tiempo(s)\n";
+    file << "Ejecucion,Tiempo(s),TiempoVirtual(ns),Stalls\n";
     for (size_t i = 0; i < metrics.times.size(); ++i) {
-        file << (i + 1) << "," << metrics.times[i] << "\n";
+        long long vt     = (i < metrics.virtual_times.size()) ? metrics.virtual_times[i] : 0LL;
+        int       stalls = (i < metrics.stall_counts.size())  ? metrics.stall_counts[i]  : 0;
+        file << (i + 1) << "," << metrics.times[i] << "," << vt << "," << stalls << "\n";
     }
 }
 

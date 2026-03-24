@@ -11,6 +11,7 @@ add_executable(raytracer
     src/Exporter.cpp
     src/SequentialRenderer.cpp
     src/FinegrainedRenderer.cpp
+    src/CoarseRenderer.cpp
 )
 
 # Flags de compilación
