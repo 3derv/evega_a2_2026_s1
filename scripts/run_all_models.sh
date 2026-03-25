@@ -13,6 +13,14 @@ RESULTS_DIR="$PROJECT_ROOT/results"
 GRAPHS_DIR="$RESULTS_DIR/graficas"
 LOG_FILE="$RESULTS_DIR/speedup_report.log"
 
+# Timeouts por modelo (segundos): estimado conservador del tiempo real por run
+#   Sequential: ~0.1s/run   → margen de 5s/run
+#   FGMT/CGMT:  ~15s/run    → margen de 30s/run (scheduler serializado)
+#   SMT:        ~110s/run   → margen de 200s/run (pipeline de etapas)
+TIMEOUT_SEQ=$(( NUM_RUNS * 5   + 60 ))
+TIMEOUT_MT=$((  NUM_RUNS * 30  + 60 ))
+TIMEOUT_SMT=$(( NUM_RUNS * 200 + 60 ))
+
 echo ""
 echo "╔══════════════════════════════════════════════════════════════════╗"
 echo "║  MEDICIONES COMPARATIVAS: SEQUENTIAL vs FGMT vs CGMT vs SMT     ║"
@@ -21,7 +29,7 @@ echo "╚═══════════════════════�
 echo ""
 
 # ─── 1. Compilar ─────────────────────────────────────────────────────────────
-echo "[1/6] Compilando proyecto (make incremental)..."
+echo "[1/7] Compilando proyecto (make incremental)..."
 cd "$PROJECT_ROOT"
 mkdir -p "$BUILD_DIR" && cd "$BUILD_DIR"
 cmake .. > /dev/null 2>&1
@@ -35,25 +43,25 @@ echo "    ✓ Compilación lista"
 # ─── 2. Sequential ───────────────────────────────────────────────────────────
 echo ""
 echo "[2/7] Ejecutando $NUM_RUNS mediciones SEQUENTIAL..."
-timeout 600 ./build/raytracer --model sequential --runs "$NUM_RUNS" > /tmp/seq_output.txt 2>&1
+timeout "$TIMEOUT_SEQ" ./build/raytracer --model sequential --runs "$NUM_RUNS" > /tmp/seq_output.txt 2>&1
 echo "    ✓ Sequential completado"
 
 # ─── 3. FGMT ─────────────────────────────────────────────────────────────────
 echo ""
 echo "[3/7] Ejecutando $NUM_RUNS mediciones FGMT..."
-timeout 600 ./build/raytracer --model fgmt --runs "$NUM_RUNS" > /tmp/fgmt_output.txt 2>&1
+timeout "$TIMEOUT_MT" ./build/raytracer --model fgmt --runs "$NUM_RUNS" > /tmp/fgmt_output.txt 2>&1
 echo "    ✓ FGMT completado"
 
 # ─── 4. CGMT ─────────────────────────────────────────────────────────────────
 echo ""
 echo "[4/7] Ejecutando $NUM_RUNS mediciones CGMT..."
-timeout 600 ./build/raytracer --model cgmt --runs "$NUM_RUNS" > /tmp/cgmt_output.txt 2>&1
+timeout "$TIMEOUT_MT" ./build/raytracer --model cgmt --runs "$NUM_RUNS" > /tmp/cgmt_output.txt 2>&1
 echo "    ✓ CGMT completado"
 
 # ─── 5. SMT ──────────────────────────────────────────────────────────────────
 echo ""
 echo "[5/7] Ejecutando $NUM_RUNS mediciones SMT..."
-timeout 600 ./build/raytracer --model smt --runs "$NUM_RUNS" > /tmp/smt_output.txt 2>&1
+timeout "$TIMEOUT_SMT" ./build/raytracer --model smt --runs "$NUM_RUNS" > /tmp/smt_output.txt 2>&1
 echo "    ✓ SMT completado"
 
 # ─── 6. Validación de correctness ────────────────────────────────────────────
