@@ -37,6 +37,12 @@ public:
     //                  El CSV contiene: Ejecucion, Tiempo(s) para plotting.
     void save_csv(const Metrics& metrics) const;
 
+    // Retorna la ruta del archivo de imagen (PPM) configurada para este modelo.
+    const std::string& get_image_file() const { return image_file_; }
+
+    // Retorna la ruta del archivo CSV configurada para este modelo.
+    const std::string& get_csv_file() const { return csv_file_; }
+
 private:
     std::string model_;        // Nombre del modelo
     std::string image_file_;   // Ruta PPM específica del modelo

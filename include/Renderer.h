@@ -13,17 +13,7 @@ struct Renderer {
     // Param: x, y - Coordenadas del píxel en la imagen (0..WIDTH, 0..HEIGHT).
     // Return: Color resultante (Vector3 con R, G, B en [0, 1]).
     Vector3 render_pixel(int x, int y) const {
-        // Coordenadas normalizadas (-1 a 1)
-        double u = (2.0 * x / constants::IMAGE_WIDTH) - 1.0;
-        double v = 1.0 - (2.0 * y / constants::IMAGE_HEIGHT);
-        double aspect = static_cast<double>(constants::IMAGE_WIDTH) / constants::IMAGE_HEIGHT;
-
-        // Rayo desde el origen hacia el pixel
-        Vector3 origin(0, 0, 0);
-        Vector3 direction(u * aspect, v, -1);
-        Ray ray(origin, direction);
-
-        return scene.trace(ray);
+        return scene.trace(make_ray(x, y));
     }
 
     // Renderiza el frame completo (todos los píxeles).

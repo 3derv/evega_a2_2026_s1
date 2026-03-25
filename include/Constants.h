@@ -69,11 +69,13 @@ inline const int NOPS_PER_STALL = 32;
 // Tiempo base por pixel: igual en todos los modelos (quantum de ejecución)
 inline const long long PIXEL_QUANTUM_NS       = 1000LL;
 
-// Penalización por stall sin ocultar: NOPS_PER_STALL × NOP_PENALTY_NS = 3200 ns
-// Aplicada en Sequential y FGMT (no tienen quién ejecute durante el stall)
+// Penalizacion completa de un stall: NOPS_PER_STALL x NOP_PENALTY_NS = 3200 ns
+// Solo Sequential paga este valor integro (ningun otro thread puede ejecutar).
+// FGMT paga solo NOP_PENALTY_NS (100 ns); CGMT paga CONTEXT_SWITCH_COST_NS (400 ns).
 inline const long long CACHE_MISS_PENALTY_NS  = static_cast<long long>(NOPS_PER_STALL) * NOP_PENALTY_NS;
 
-// Overhead de cambio de contexto en CGMT (el stall en sí queda oculto)
+// Overhead de cambio de contexto en CGMT: el stall queda oculto pero se paga
+// el costo de guardar/restaurar registros del contexto = 4 ciclos x 100 ns/ciclo
 inline const long long CONTEXT_SWITCH_COST_NS = 400LL;
 
 } // namespace constants

@@ -5,61 +5,34 @@
 #include "Scene.h"
 #include "Ray.h"
 #include "CacheModel.h"
+#include "Constants.h"
 #include <vector>
 
-// SequentialRenderer: Renderizador secuencial de ray tracing con cache modeling.
+// SequentialRenderer: modelo de referencia sin multithreading (baseline).
 //
-// Responsabilidad:
-//   - Implementar renderizado secuencial (un único hilo).
-//   - Procesar píxeles secuencialmente sin paralelismo.
-//   - Simular cache hits/misses y stalls (NOPs) durante renderizado.
-//   - Servir como línea base con realismo para comparación con otros modelos.
+// Renderiza todos los pixels en un solo hilo, fila por fila (row-major).
+// Es el unico modelo que paga el costo COMPLETO de cada stall:
+//   CACHE_MISS_PENALTY_NS = NOPS_PER_STALL x NOP_PENALTY_NS = 3200 ns
+// porque no hay otro thread que pueda ejecutar mientras espera la memoria.
 //
-// Hereda de IRenderer para permitir polimorfismo y Factory Pattern.
+// Se usa como linea base para calcular el speedup de FGMT y CGMT.
 class SequentialRenderer : public IRenderer {
 private:
     Scene scene;
-    CacheModel cache;                 // Simulador de cache para un único thread
-    long long virtual_time_ns_ = 0LL; // Acumula tiempo virtual del último render_frame()
-    int stall_count_ = 0;             // Cache misses en el último render_frame()
+    CacheModel cache;                  // Una unica instancia de cache (hilo unico)
+    long long virtual_time_ns_ = 0LL; // Tiempo de reloj virtual del ultimo render_frame()
+    int stall_count_ = 0;             // Cache misses en el ultimo render_frame()
     
 public:
-    // Constructor: inicializa la escena y cache model
-    // El cache se configura con valor de Constants::CACHE_SIZE
     SequentialRenderer();
 
-    // render_pixel(): Renderiza un píxel individual sin stalls.
-    // Param: x, y - Coordenadas del píxel (0..IMAGE_WIDTH, 0..IMAGE_HEIGHT)
-    // Return: Color resultante (Vector3 R, G, B en [0, 1])
-    // Nota: Este método realiza el cálculo de ray tracing pero NO ejecuta NOPs
-    //       Los NOPs se ejecutan en render_frame() basándose en cache misses
+    // Proyecta el pixel (x, y) al espacio NDC y traza el rayo resultante.
+    // Delega la proyeccion a make_ray() (Ray.h) para evitar duplicacion.
     Vector3 render_pixel(int x, int y) const {
-        double u = (2.0 * x / 640.0) - 1.0;
-        double v = 1.0 - (2.0 * y / 480.0);
-        double aspect = 640.0 / 480.0;
-
-        Vector3 origin(0, 0, 0);
-        Vector3 direction(u * aspect, v, -1);
-        Ray ray(origin, direction);
-
-        return scene.trace(ray);
+        return scene.trace(make_ray(x, y));
     }
 
-    // render_frame(): Implementación de IRenderer. Renderiza frame secuencialmente.
-    // Responsabilidad:
-    //   1. Resetear cache model
-    //   2. Iterar píxeles en orden row-major (fila por fila, columna por columna)
-    //   3. Para cada píxel:
-    //      - Llamar render_pixel() para calcular color
-    //      - Consultar cache.is_cache_miss(x, y)
-    //      - Si hay miss: ejecutar NOPS_PER_STALL operaciones NOP
-    //   4. Retornar frame buffer completo
-    // Return: Vector<Vector3> con dimensiones IMAGE_WIDTH × IMAGE_HEIGHT
-    // Performance: ~12ms con cache misses (vs ~5-6ms en FGMT con 4 threads)
     std::vector<Vector3> render_frame() override;
-
-    // get_model_name(): Retorna identificador del modelo para logging/CSV
-    // Return: String "sequential"
     std::string get_model_name() const override { return "sequential"; }
     long long get_virtual_time_ns() const override { return virtual_time_ns_; }
     int get_total_stalls() const override { return stall_count_; }

@@ -86,6 +86,12 @@ struct GenericRunner {
         return metrics;
     }
 
+    // Retorna la ruta del archivo imagen generado por este runner.
+    const std::string& get_image_file() const { return exporter_.get_image_file(); }
+
+    // Retorna la ruta del archivo CSV generado por este runner.
+    const std::string& get_csv_file() const { return exporter_.get_csv_file(); }
+
 private:
     std::unique_ptr<IRenderer> renderer_;  // Renderer (inyectado por DIP)
     int runs_;                             // Número de ejecuciones a realizar

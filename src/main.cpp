@@ -66,28 +66,10 @@ int main(int argc, char* argv[]) {
                 std::cout << "    Tiempo virtual: " << tm.virtual_time_ns << " ns" << std::endl;
             }
         }
-        
-        // Determinar nombres de archivos según el modelo
-        std::string csv_file, img_file;
-        if (model == "fgmt") {
-            csv_file = constants::CSV_FILE_FGMT;
-            img_file = constants::IMAGE_FILE_FGMT;
-        } else if (model == "cgmt") {
-            csv_file = constants::CSV_FILE_CGMT;
-            img_file = constants::IMAGE_FILE_CGMT;
-        } else if (model == "smt") {
-            csv_file = constants::CSV_FILE_SMT;
-            img_file = constants::IMAGE_FILE_SMT;
-        } else if (model == "cmp") {
-            csv_file = constants::CSV_FILE_CMP;
-            img_file = constants::IMAGE_FILE_CMP;
-        } else {
-            csv_file = constants::CSV_FILE_SEQUENTIAL;
-            img_file = constants::IMAGE_FILE_SEQUENTIAL;
-        }
-        
-        std::cout << "\nArchivo de mediciones guardado en: " << csv_file << std::endl;
-        std::cout << "Imagen guardada en: " << img_file << std::endl;
+
+        // Rutas ya definidas en Exporter: no se repite la lógica modelo→archivo
+        std::cout << "\nArchivo de mediciones guardado en: " << runner.get_csv_file() << std::endl;
+        std::cout << "Imagen guardada en: " << runner.get_image_file() << std::endl;
 
         return 0;
     } catch (const std::invalid_argument& e) {
