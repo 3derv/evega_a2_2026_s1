@@ -74,7 +74,7 @@ void FinegrainedRenderer::render_tile_worker(int thread_id) {
                 stats.cache_misses++;
             } else {
                 // COMPUTE: renderizar pixel y avanzar al siguiente
-                frame[y * IMAGE_WIDTH + x] = scene.trace(make_ray(x, y));
+                frame[y * IMAGE_WIDTH + x] = scene.trace(make_ray(x, y, camera_pos_));
                 stats.virtual_time_ns += PIXEL_QUANTUM_NS;
 
                 x++;

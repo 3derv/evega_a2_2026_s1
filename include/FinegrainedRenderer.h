@@ -5,6 +5,7 @@
 #include "Scene.h"
 #include "CacheModel.h"
 #include "Metrics.h"
+#include "Ray.h"
 #include <vector>
 #include <thread>
 #include <mutex>
@@ -45,6 +46,10 @@ private:
 
     long long virtual_time_ns_ = 0LL;
 
+    // Posición de cámara para el frame actual (actualizada por GenericRunner).
+    // Permite que el scheduler reciba la órbita elíptica sin cambiar su lógica.
+    Vector3 camera_pos_;
+
     // Scheduler FGMT: reloj global compartido entre todos los threads.
     // Un thread solo avanza cuando global_clock_ % NUM_THREADS == su thread_id.
     // Esto serializa la ejecucion en ciclos de pipeline: 1 thread por ciclo.
@@ -60,6 +65,10 @@ public:
     // Divide el frame en 4 tiles iguales (NUM_THREADS=4), uno por thread
     // Inicializa CacheModel para cada thread con parámetros de Constants.h
     FinegrainedRenderer();
+
+    // Actualiza la posición de cámara antes de render_frame().
+    // GenericRunner la llama una vez por frame; el scheduler FGMT no cambia.
+    void set_camera_pos(const Vector3& pos) override { camera_pos_ = pos; }
 
     // render_frame(): Implementación de IRenderer. Renderiza frame con 4 threads paralelos.
     // Responsabilidad:
