@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
-# make_gif_sequential.sh — Genera gif_secuencial.gif a partir de los 200 frames
+# make_gif_sequential.sh — Ensambla gif_secuencial.gif a partir de los 200 frames PPM
 # del modelo secuencial con órbita elíptica de cámara.
+#
+# Flujo:
+#   1. Si los 200 frames ya existen en tests/gif_utils/ → los reutiliza.
+#   2. Si faltan    → ejecuta ./build/raytracer --model sequential --gif para generarlos.
+#   3. Ensambla el GIF con FFmpeg (si está disponible) o Pillow como fallback.
 #
 # Uso:   ./scripts/make_gif_sequential.sh
 # Salida: results/gif/gif_secuencial.gif
@@ -14,6 +19,7 @@ cd "$ROOT"
 FRAMES_DIR="tests/gif_utils"
 GIF_DIR="results/gif"
 GIF_OUT="$GIF_DIR/gif_secuencial.gif"
+EXPECTED_FRAMES=200
 
 # ── 1. Verificar herramientas disponibles ─────────────────────────────────────
 HAS_FFMPEG=0
@@ -28,11 +34,16 @@ if [[ $HAS_FFMPEG -eq 0 && $HAS_PILLOW -eq 0 ]]; then
     exit 1
 fi
 
-# ── 2. Renderizar los 200 frames y guardarlos en tests/gif_utils ───────────────
-echo "[1/2] Renderizando 200 frames (sequential, 160x120)..."
-mkdir -p "$FRAMES_DIR" "$GIF_DIR"
-./build/raytracer --model sequential --save-frames "$FRAMES_DIR"
-echo "      Frames guardados en $FRAMES_DIR"
+# ── 2. Renderizar solo si faltan frames ───────────────────────────────────────
+FOUND=$(find "$FRAMES_DIR" -name "frame_*.ppm" 2>/dev/null | wc -l || true)
+if [[ $FOUND -ge $EXPECTED_FRAMES ]]; then
+    echo "[1/2] Frames ya existentes ($FOUND encontrados) — omitiendo render."
+else
+    echo "[1/2] Renderizando $EXPECTED_FRAMES frames (sequential, 160x120)..."
+    mkdir -p "$FRAMES_DIR" "$GIF_DIR"
+    ./build/raytracer --model sequential --gif
+    echo "      Frames guardados en $FRAMES_DIR"
+fi
 
 # ── 3. Ensamblar GIF ──────────────────────────────────────────────────────────
 echo "[2/2] Generando GIF…"

@@ -47,6 +47,9 @@ inline const double CAMERA_ORBIT_RX = 8.0;  // semi-eje mayor (horizontal)
 inline const double CAMERA_ORBIT_RZ = 6.0;  // semi-eje menor (profundidad)
 inline const double CAMERA_ORBIT_Y  = 0.0;  // altura fija de la cámara
 
+// Directorio donde se vuelcan los 200 PPMs intermedios cuando se usa --gif
+inline const std::string GIF_FRAMES_DIR = "tests/gif_utils";
+
 // ============================================================================
 // DIRECTORIOS Y ARCHIVOS DE SALIDA
 // ============================================================================

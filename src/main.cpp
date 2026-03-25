@@ -10,7 +10,7 @@ int main(int argc, char* argv[]) {
     int num_runs  = 1;
     int verbose   = 0;    // ciclos a imprimir con --verbose N (solo SMT)
     std::string model = "sequential";  // Modelo por defecto
-    std::string save_frames_dir;       // Directorio para frames intermedios (vacío = deshabilitado)
+    bool save_gif_frames = false;      // --gif: guardar frames intermedios en GIF_FRAMES_DIR
     
     // Parsear argumentos: --model {sequential|fgmt|...} --runs N [--verbose N]
     for (int i = 1; i < argc; ++i) {
@@ -21,8 +21,8 @@ int main(int argc, char* argv[]) {
             num_runs = std::stoi(argv[++i]);
         } else if (arg == "--verbose" && i + 1 < argc) {
             verbose = std::stoi(argv[++i]);
-        } else if (arg == "--save-frames" && i + 1 < argc) {
-            save_frames_dir = argv[++i];
+        } else if (arg == "--gif") {
+            save_gif_frames = true;
         } else if (arg == "--help" || arg == "-h") {
             std::cout << RendererFactory::get_help_message();
             return 0;
@@ -44,8 +44,8 @@ int main(int argc, char* argv[]) {
         
         // Ejecutar mediciones
         trace::GenericRunner runner(std::move(renderer), num_runs, model);
-        if (!save_frames_dir.empty())
-            runner.set_frames_dir(save_frames_dir);
+        if (save_gif_frames)
+            runner.set_frames_dir(constants::GIF_FRAMES_DIR);
         trace::Metrics metrics = runner.run();
 
         // Resumen de mediciones
