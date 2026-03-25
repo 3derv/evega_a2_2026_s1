@@ -78,6 +78,29 @@ inline const long long CACHE_MISS_PENALTY_NS  = static_cast<long long>(NOPS_PER_
 // el costo de guardar/restaurar registros del contexto = 4 ciclos x 100 ns/ciclo
 inline const long long CONTEXT_SWITCH_COST_NS = 400LL;
 
+// ============================================================================
+// PARÁMETROS DE SMT (Simultaneous Multithreading)
+// ============================================================================
+
+// Número de contextos hardware en el núcleo SMT
+// Igual a NUM_THREADS para mantener comparabilidad entre modelos
+inline const int SMT_NUM_THREADS = 4;
+
+// Issue width W: cuántos threads puede despachar el pipeline por ciclo.
+// W=2 modela un SMT 2-way: 2 instrucciones de threads distintos por ciclo.
+// En FGMT solo 1 thread avanza por ciclo; SMT puede avanzar hasta 2 → más throughput.
+inline const int SMT_ISSUE_WIDTH = 2;
+
+// Número de etapas en que se descompone el trazado de un pixel (pipeline SMT):
+//   RAY_GEN, INTERSECT_0, INTERSECT_1, INTERSECT_2, SHADE = 5 etapas
+// Cada etapa representa una "instrucción" que puede stallarse independientemente.
+inline const int SMT_NUM_STAGES = 5;
+
+// Costo de una etapa de pipeline (ns).
+// STAGE_QUANTUM_NS × SMT_NUM_STAGES = PIXEL_QUANTUM_NS = 1000 ns → consistente.
+// Un pixel completo sin stalls cuesta exactamente lo mismo en todos los modelos.
+inline const long long STAGE_QUANTUM_NS = PIXEL_QUANTUM_NS / SMT_NUM_STAGES; // 200 ns
+
 } // namespace constants
 
 #endif // CONSTANTS_H
