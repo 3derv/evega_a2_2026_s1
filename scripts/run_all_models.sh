@@ -21,16 +21,16 @@ echo "╚═══════════════════════�
 echo ""
 
 # ─── 1. Compilar ─────────────────────────────────────────────────────────────
-echo "[1/6] Verificando compilación..."
+echo "[1/6] Compilando proyecto (make incremental)..."
 cd "$PROJECT_ROOT"
-if [ ! -x "$BUILD_DIR/raytracer" ]; then
-    echo "    Compilando proyecto..."
-    mkdir -p build && cd build
-    cmake .. > /dev/null 2>&1
-    make > /dev/null 2>&1
-    cd "$PROJECT_ROOT"
-fi
-echo "    ✓ Ejecutable listo"
+mkdir -p "$BUILD_DIR" && cd "$BUILD_DIR"
+cmake .. > /dev/null 2>&1
+# Siempre ejecutar make para detectar cambios en headers o fuentes nuevas.
+# Un binario stale (mezcla de objetos viejos y nuevos) puede causar crashes
+# intermitentes que no aparecen con sanitizers pero sí en producción con -O2.
+make -j4 2>&1 | grep -E "^(\[|error:|warning:)" || true
+cd "$PROJECT_ROOT"
+echo "    ✓ Compilación lista"
 
 # ─── 2. Sequential ───────────────────────────────────────────────────────────
 echo ""
