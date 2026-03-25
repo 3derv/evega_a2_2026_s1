@@ -5,6 +5,7 @@
 #include "SequentialRenderer.h"
 #include "FinegrainedRenderer.h"
 #include "CoarseRenderer.h"
+#include "SMTRenderer.h"
 #include <functional>
 #include <memory>
 #include <stdexcept>
@@ -27,6 +28,7 @@ class RendererFactory {
             {"sequential", [] { return std::make_unique<SequentialRenderer>(); }},
             {"fgmt",       [] { return std::make_unique<FinegrainedRenderer>(); }},
             {"cgmt",       [] { return std::make_unique<CoarseRenderer>(); }},
+            {"smt",        [] { return std::make_unique<SMTRenderer>(); }},
         };
         return reg;
     }
@@ -34,8 +36,7 @@ class RendererFactory {
     // Registro de modelos en desarrollo: modelo → mensaje de error.
     static const std::unordered_map<std::string, std::string>& dev_registry() {
         static const std::unordered_map<std::string, std::string> reg = {
-            {"smt", "SMT is still in development. Use '--model sequential', '--model fgmt', or '--model cgmt' for now."},
-            {"cmp", "CMP is still in development. Use '--model sequential', '--model fgmt', or '--model cgmt' for now."},
+            {"cmp", "CMP is still in development. Use '--model sequential', '--model fgmt', '--model cgmt', or '--model smt' for now."},
         };
         return reg;
     }
@@ -53,7 +54,7 @@ public:
             throw std::runtime_error(dev_it->second);
 
         throw std::invalid_argument(
-            "Unknown model: " + model_name + ". Available: sequential, fgmt, cgmt");
+            "Unknown model: " + model_name + ". Available: sequential, fgmt, cgmt, smt");
     }
 
     // Retorna true si el modelo está disponible (no en desarrollo).
@@ -64,9 +65,9 @@ public:
     // Retorna mensaje de ayuda con modelos disponibles.
     static std::string get_help_message() {
         return "Usage: ./raytracer [--model MODEL] [--runs N]\n"
-               "Models available: sequential, fgmt, cgmt\n"
-               "Models in development: smt, cmp\n"
-               "Example: ./raytracer --model cgmt --runs 200\n";
+               "Models available: sequential, fgmt, cgmt, smt\n"
+               "Models in development: cmp\n"
+               "Example: ./raytracer --model smt --runs 200\n";
     }
 };
 
