@@ -1,183 +1,137 @@
 #include "CoarseRenderer.h"
 #include "Constants.h"
 #include "Ray.h"
-#include <iostream>
-#include <chrono>
+#include "RendererUtils.h"
 
 using namespace constants;
 using namespace trace;
 
 CoarseRenderer::CoarseRenderer()
-    : scene(), frame(IMAGE_WIDTH * IMAGE_HEIGHT), current_thread(0), threads_finished(0) {
-    
+    : scene(), frame(IMAGE_WIDTH * IMAGE_HEIGHT),
+      current_thread(0), threads_finished(0), global_clock_(0) {
+
     tasks.resize(NUM_THREADS);
-    int total_pixels = IMAGE_WIDTH * IMAGE_HEIGHT;
+    int total_pixels    = IMAGE_WIDTH * IMAGE_HEIGHT;
     int pixels_per_thread = total_pixels / NUM_THREADS;
-    
+
     for (int i = 0; i < NUM_THREADS; ++i) {
-        tasks[i].start = i * pixels_per_thread;
-        tasks[i].end = (i == NUM_THREADS - 1) 
-                        ? total_pixels
-                        : (i + 1) * pixels_per_thread;
+        tasks[i].start     = i * pixels_per_thread;
+        tasks[i].end       = (i == NUM_THREADS - 1) ? total_pixels
+                                                     : (i + 1) * pixels_per_thread;
         tasks[i].thread_id = i;
     }
-    
+
     cache_models.resize(NUM_THREADS);
-    for (int i = 0; i < NUM_THREADS; ++i) {
+    for (int i = 0; i < NUM_THREADS; ++i)
         cache_models[i] = CacheModel(CACHE_SIZE);
-    }
-    
+
     thread_done.resize(NUM_THREADS, false);
-    
+
     thread_stats.resize(NUM_THREADS);
-    for (int i = 0; i < NUM_THREADS; ++i) {
+    for (int i = 0; i < NUM_THREADS; ++i)
         thread_stats[i].thread_id = i;
-        thread_stats[i].nops_count = 0;
-        thread_stats[i].nop_time_ns = 0.0;
-        thread_stats[i].cache_misses = 0;
-    }
 }
 
+// switch_to_next_thread: scheduler hardware CGMT.
+//
+// Busca el siguiente thread activo en round-robin saltando los que ya
+// terminaron su tile. Debe llamarse bajo sched_mutex.
+// Espejo del switch_to_next_thread() del código de referencia en C.
+void CoarseRenderer::switch_to_next_thread() {
+    int next = (current_thread + 1) % NUM_THREADS;
+    while (thread_done[next] && threads_finished < NUM_THREADS)
+        next = (next + 1) % NUM_THREADS;
+    current_thread = next;
+}
+
+// render_worker: ciclo principal del scheduler CGMT.
+//
+// Replica el patrón del código de referencia en C:
+//   1. ESPERA  — bloquea hasta que el scheduler asigne este thread.
+//   2a. STALL  — cache miss: no avanza el pixel, paga el ciclo de stall
+//                y si hubo cambio real de contexto paga la penalización.
+//   2b. COMPUTE — sin stall: renderiza el pixel y avanza al siguiente.
+//                 Si terminó el tile: marca done y cede sin costo extra.
+//   3. BROADCAST — notifica a todos para que el siguiente despierte.
+//
+// Diferencia clave vs FGMT: la rotación solo ocurre en stall, no en
+// cada ciclo. El thread retiene el pipeline mientras no tenga stalls.
 void CoarseRenderer::render_worker(int thread_id) {
-    const Task& task = tasks[thread_id];
-    CacheModel& cache = cache_models[thread_id];
+    const Task&    task  = tasks[thread_id];
+    CacheModel&    cache = cache_models[thread_id];
     ThreadMetrics& stats = thread_stats[thread_id];
-    
+
     int pixel_idx = task.start;
-    
-    while (pixel_idx < task.end) {
-        // ====================================================================
-        // 1. ESPERAR TURNO
-        // ====================================================================
-        {
-            std::unique_lock<std::mutex> lock(sched_mutex);
-            
-            // Espera indefinidamente hasta que sea su turno
-            while (current_thread != thread_id) {
-                sched_cv.wait(lock);
-            }
-        }
-        
-        // ====================================================================
-        // 2. PROCESAR UN ÚNICO PÍXEL
-        // ====================================================================
-        
-        if (pixel_idx < task.end) {
-            int y = pixel_idx / IMAGE_WIDTH;
-            int x = pixel_idx % IMAGE_WIDTH;
-            
-            // Renderizar píxel
-            double u = (2.0 * x / IMAGE_WIDTH) - 1.0;
-            double v = 1.0 - (2.0 * y / IMAGE_HEIGHT);
-            double aspect = static_cast<double>(IMAGE_WIDTH) / IMAGE_HEIGHT;
-            
-            Vector3 origin(0, 0, 0);
-            Vector3 direction(u * aspect, v, -1);
-            Ray ray(origin, direction);
-            Vector3 color = scene.trace(ray);
-            frame[pixel_idx] = color;
 
-            // Quantum: tiempo base por pixel en reloj virtual
-            stats.virtual_time_ns += PIXEL_QUANTUM_NS;
-
-            // ================================================================
-            // 3. REVISAR CACHE MISS (STALL)
-            // ================================================================
-
-            if (cache.is_cache_miss(x, y)) {
-                // STALL DETECTADO: en CGMT el stall se oculta cediendo al siguiente thread
-                stats.cache_misses++;
-                // Solo se paga el overhead del cambio de contexto, no la penalización completa
-                stats.virtual_time_ns += CONTEXT_SWITCH_COST_NS;
-
-                // ============================================================
-                // 4. CAMBIO DE CONTEXTO: CEDE AL SIGUIENTE THREAD NO TERMINADO
-                // ============================================================
-                {
-                    std::unique_lock<std::mutex> lock(sched_mutex);
-                    
-                    // Encontrar el siguiente thread que NO haya terminado
-                    int next_thread = (thread_id + 1) % NUM_THREADS;
-                    int attempts = 0;
-                    
-                    // Saltar threads que ya terminaron
-                    while (thread_done[next_thread] && attempts < NUM_THREADS) {
-                        next_thread = (next_thread + 1) % NUM_THREADS;
-                        attempts++;
-                    }
-                    
-                    // Solo cambiar si encontramos un thread activo
-                    if (attempts < NUM_THREADS) {
-                        current_thread = next_thread;
-                        sched_cv.notify_all();
-                    }
-                }
-            }
-            
-            pixel_idx++;
-        }
-    }
-    
-    // ========================================================================
-    // 5. THREAD TERMINÓ
-    // ========================================================================
-    {
+    while (true) {
         std::unique_lock<std::mutex> lock(sched_mutex);
-        thread_done[thread_id] = true;
-        threads_finished++;
-        
-        // Ceder al siguiente thread ACTIVO (no terminado)
-        if (threads_finished < NUM_THREADS) {
-            int next_thread = (thread_id + 1) % NUM_THREADS;
-            int attempts = 0;
-            
-            // Saltar threads que ya terminaron
-            while (thread_done[next_thread] && attempts < NUM_THREADS) {
-                next_thread = (next_thread + 1) % NUM_THREADS;
-                attempts++;
+
+        // Salida anticipada: todos los tiles completados
+        if (threads_finished == NUM_THREADS) break;
+
+        // CGMT: esperar a que el hardware asigne este contexto
+        sched_cv.wait(lock, [&] {
+            return current_thread == thread_id
+                || threads_finished == NUM_THREADS;
+        });
+
+        if (threads_finished == NUM_THREADS) break;
+
+        int x = pixel_idx % IMAGE_WIDTH;
+        int y = pixel_idx / IMAGE_WIDTH;
+
+        if (cache.is_cache_miss(x, y)) {
+            // ── STALL ──────────────────────────────────────────────────────
+            // El pipeline detecta el miss: el slot se consume pero el pixel
+            // NO avanza (se reintentará el próximo turno de este contexto).
+            stats.cache_misses++;
+            stats.virtual_time_ns += PIXEL_QUANTUM_NS;  // ciclo del stall
+            global_clock_++;
+
+            // Cambio de contexto: cede al siguiente thread activo
+            int prev = current_thread;
+            switch_to_next_thread();
+            if (current_thread != prev) {
+                // Penalización real de context switch solo si hubo cambio
+                stats.virtual_time_ns += CONTEXT_SWITCH_COST_NS;
+                global_clock_++;
             }
-            
-            // Solo cambiar si encontramos un thread activo
-            if (attempts < NUM_THREADS && !thread_done[next_thread]) {
-                current_thread = next_thread;
+        } else {
+            // ── COMPUTE ────────────────────────────────────────────────────
+            // Renderizar pixel y avanzar al siguiente de este tile
+            frame[pixel_idx] = scene.trace(make_ray(x, y));
+            stats.virtual_time_ns += PIXEL_QUANTUM_NS;
+            global_clock_++;
+            pixel_idx++;
+
+            if (pixel_idx >= task.end) {
+                // Tile terminado: ceder al siguiente sin costo extra
+                thread_done[thread_id] = true;
+                threads_finished++;
+                switch_to_next_thread();
             }
         }
-        
-        // Despierta a TODOS los threads bloqueados esperando turno
+
         sched_cv.notify_all();
     }
 }
 
 std::vector<Vector3> CoarseRenderer::render_frame() {
-    // Reiniciar estado
-    for (int i = 0; i < NUM_THREADS; ++i) {
-        cache_models[i].reset();
-        thread_stats[i].nops_count = 0;
-        thread_stats[i].nop_time_ns = 0.0;
-        thread_stats[i].cache_misses = 0;
-        thread_stats[i].virtual_time_ns = 0LL;
+    // Reiniciar contadores, caches y estado del scheduler
+    reset_thread_stats(thread_stats, cache_models);
+    for (int i = 0; i < NUM_THREADS; ++i)
         thread_done[i] = false;
-    }
-    
-    current_thread = 0;
+    current_thread   = 0;
     threads_finished = 0;
-    
-    // Crear threads
-    std::vector<std::thread> threads;
-    for (int i = 0; i < NUM_THREADS; ++i) {
-        threads.emplace_back(&CoarseRenderer::render_worker, this, i);
-    }
-    
-    // Esperar a que todos terminen
-    for (auto& t : threads) {
-        t.join();
-    }
+    global_clock_    = 0;
 
-    // Tiempo virtual CGMT = suma de threads (ejecución serial; stalls ocultos por switching)
-    virtual_time_ns_ = 0LL;
-    for (int i = 0; i < NUM_THREADS; ++i) {
-        virtual_time_ns_ += thread_stats[i].virtual_time_ns;
-    }
+    std::vector<std::thread> threads;
+    for (int i = 0; i < NUM_THREADS; ++i)
+        threads.emplace_back(&CoarseRenderer::render_worker, this, i);
+    for (auto& t : threads) t.join();
+
+    // VT total = suma de threads (ejecución serial; stalls ocultos por switch)
+    virtual_time_ns_ = sum_virtual_times(thread_stats);
 
     return frame;
 }

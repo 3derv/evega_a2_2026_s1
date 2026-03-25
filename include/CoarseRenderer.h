@@ -11,14 +11,24 @@
 #include <condition_variable>
 #include <atomic>
 
-// CoarseRenderer: Renderizador CGMT (Coarse-Grained Multithreading) con Scheduler Formal.
+// CoarseRenderer: Renderizador CGMT (Coarse-Grained Multithreading).
 //
-// Modelo CGMT simplificado pero correcto:
-//   - Solo un thread ejecuta a la vez (sincronización vía condition_variable)
-//   - Cada thread procesa su bloque secuencialmente
-//   - En cache miss (stall): cede CPU al siguiente thread (round-robin)
-//   - Sin deadlocks: sincronización clara de entrada/salida de secciones críticas
+// Scheduler: solo un thread ejecuta a la vez. La rotación ocurre
+// ÚNICAMENTE cuando el thread activo detecta un stall (cache miss).
+// Esto difiere de FGMT, donde la rotación es obligatoria cada ciclo.
 //
+// Mecanismo (idéntico al código de referencia en C):
+//   - current_thread_ indica qué thread tiene el pipeline.
+//   - En STALL: se paga el ciclo de stall + penalización de context switch
+//               si realmente se cede a otro thread.
+//        → stats: +PIXEL_QUANTUM_NS + CONTEXT_SWITCH_COST_NS
+//        → el pixel NO avanza; se reintentará el próximo turno.
+//   - En COMPUTE: se renderiza el pixel, se avanza, sin cambio de contexto.
+//        → stats: +PIXEL_QUANTUM_NS
+//   - Al terminar el tile: switch_to_next_thread() sin coste extra.
+//
+// switch_to_next_thread() está extraída como método privado (DRY + SRP)
+// para evitar duplicar la búsqueda del siguiente thread activo.
 class CoarseRenderer : public IRenderer {
 private:
     Scene scene;
@@ -32,22 +42,28 @@ private:
     };
     std::vector<Task> tasks;
     
-    // Variables de scheduler
+    // Variables de scheduler CGMT
     std::mutex sched_mutex;
     std::condition_variable sched_cv;
-    int current_thread;                    // Cuál thread tiene control
-    std::vector<bool> thread_done;         // Marca si thread completó su tarea
-    std::atomic<int> threads_finished;     // Contador de threads terminados
-    
-    long long virtual_time_ns_ = 0LL; // Tiempo virtual del último render_frame() = suma(threads)
+    int current_thread;                // Thread que tiene asignado el pipeline
+    std::vector<bool> thread_done;     // true si el thread completó su tile
+    int threads_finished;              // Conteo de threads terminados (bajo mutex)
+    int global_clock_;                 // Ciclos totales de hardware simulados
+
+    long long virtual_time_ns_ = 0LL;
+
+    // switch_to_next_thread(): Scheduler hardware CGMT.
+    // Busca el siguiente thread activo (round-robin, saltando los terminados).
+    // Debe llamarse mientras se sostiene sched_mutex.
+    void switch_to_next_thread();
     void render_worker(int thread_id);
 
 public:
     CoarseRenderer();
     std::vector<Vector3> render_frame() override;
     std::string get_model_name() const override { return "cgmt"; }
-    const std::vector<trace::ThreadMetrics>& get_thread_metrics() const { 
-        return thread_stats; 
+    const std::vector<trace::ThreadMetrics>& get_thread_metrics() const override {
+        return thread_stats;
     }
     long long get_virtual_time_ns() const override { return virtual_time_ns_; }
     int get_total_stalls() const override {
