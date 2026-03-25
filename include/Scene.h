@@ -18,12 +18,13 @@
 struct Scene {
     std::vector<Sphere> spheres;  // Lista de objetos en la escena
 
-    // Constructor que inicializa la escena con objetos de prueba.
+    // Constructor que inicializa la escena con las 3 esferas definidas en Constants.h.
+    // Las posiciones y radios se leen de constantes para centralizar la configuración.
     Scene() {
-        // Añadir esferas de ejemplo para validación
-        spheres.emplace_back(Vector3(0, 0, -5), 1.0, Vector3(1, 0, 0)); // Roja
-        spheres.emplace_back(Vector3(2, 0, -5), 1.0, Vector3(0, 1, 0)); // Verde
-        spheres.emplace_back(Vector3(-2, 0, -5), 1.0, Vector3(0, 0, 1)); // Azul
+        using namespace constants;
+        spheres.emplace_back(Vector3(SPHERE0_X, SPHERE0_Y, SPHERE0_Z), SPHERE0_RADIUS, Vector3(1, 0, 0)); // Roja
+        spheres.emplace_back(Vector3(SPHERE1_X, SPHERE1_Y, SPHERE1_Z), SPHERE1_RADIUS, Vector3(0, 1, 0)); // Verde
+        spheres.emplace_back(Vector3(SPHERE2_X, SPHERE2_Y, SPHERE2_Z), SPHERE2_RADIUS, Vector3(0, 0, 1)); // Azul
     }
 
     // Traza un rayo en la escena y retorna el color del objeto más cercano.

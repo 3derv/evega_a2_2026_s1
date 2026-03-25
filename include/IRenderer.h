@@ -37,6 +37,11 @@ public:
 
     // Retorna el nombre del modelo para debugging/logging.
     virtual std::string get_model_name() const = 0;
+
+    // Establece la posición de la cámara antes de llamar a render_frame().
+    // Implementación por defecto no-op: modelos que aún no soporten animación
+    // de cámara simplemente ignoran esta llamada.
+    virtual void set_camera_pos(const Vector3& /*pos*/) {}
 };
 
 #endif // IRENDERER_H

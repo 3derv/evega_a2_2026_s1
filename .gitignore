@@ -23,6 +23,9 @@ mono_crash.*
 *.txt
 build/
 
+# Frames intermedios para GIF (generados, no versionar)
+tests/gif_utils/
+
 # ============================================================================
 # ARCHIVOS GENERADOS (No subirlos al repositorio)
 # ============================================================================

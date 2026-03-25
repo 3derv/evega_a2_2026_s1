@@ -22,14 +22,18 @@ private:
     CacheModel cache;                  // Una unica instancia de cache (hilo unico)
     long long virtual_time_ns_ = 0LL; // Tiempo de reloj virtual del ultimo render_frame()
     int stall_count_ = 0;             // Cache misses en el ultimo render_frame()
-    
+    Vector3 camera_pos_;              // Posición de cámara para el frame actual
+
 public:
     SequentialRenderer();
 
-    // Proyecta el pixel (x, y) al espacio NDC y traza el rayo resultante.
-    // Delega la proyeccion a make_ray() (Ray.h) para evitar duplicacion.
+    // Actualiza la posición de la cámara antes de render_frame().
+    // GenericRunner la llama una vez por frame con la posición de la órbita.
+    void set_camera_pos(const Vector3& pos) override { camera_pos_ = pos; }
+
+    // Proyecta el pixel (x, y) usando make_ray con look-at desde camera_pos_.
     Vector3 render_pixel(int x, int y) const {
-        return scene.trace(make_ray(x, y));
+        return scene.trace(make_ray(x, y, camera_pos_));
     }
 
     std::vector<Vector3> render_frame() override;

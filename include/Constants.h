@@ -10,9 +10,42 @@ namespace constants {
 // ============================================================================
 
 // Dimensiones de la imagen renderizada (píxeles)
-// Típico: 640x480 proporciona balance entre claridad y velocidad de renderizado
-inline const int IMAGE_WIDTH = 640;
-inline const int IMAGE_HEIGHT = 480;
+// 160x120 = resolución reducida para medir rendimiento por frame con animación
+inline const int IMAGE_WIDTH  = 160;
+inline const int IMAGE_HEIGHT = 120;
+
+// ============================================================================
+// PARÁMETROS DE ANIMACIÓN
+// ============================================================================
+
+// Número de frames a renderizar por ejecución (1° de rotación de cámara por frame)
+inline const int NUM_FRAMES = 200;
+
+// ============================================================================
+// POSICIONES DE LAS ESFERAS EN LA ESCENA
+// ============================================================================
+
+// Esfera 0 — roja, centrada en la escena
+inline const double SPHERE0_X = 0.0,  SPHERE0_Y = 0.0, SPHERE0_Z = -5.0, SPHERE0_RADIUS = 1.2;
+// Esfera 1 — verde, a la derecha
+inline const double SPHERE1_X = 2.0,  SPHERE1_Y = 1.0, SPHERE1_Z = -5.0, SPHERE1_RADIUS = 1.0;
+// Esfera 2 — azul, a la izquierda
+inline const double SPHERE2_X = -2.0, SPHERE2_Y = -1.0, SPHERE2_Z = -5.0, SPHERE2_RADIUS = 1.0;
+
+// ============================================================================
+// CÁMARA Y ÓRBITA ELÍPTICA
+// ============================================================================
+
+// Centro de la escena al que apunta la cámara en todo momento
+inline const double SCENE_CENTER_X = 0.0;
+inline const double SCENE_CENTER_Y = 0.0;
+inline const double SCENE_CENTER_Z = -5.0;
+
+// Semi-ejes de la órbita elíptica en el plano XZ.
+// A frame 90 (90°) la cámara pasa por (0,0,0) → vista idéntica al baseline.
+inline const double CAMERA_ORBIT_RX = 8.0;  // semi-eje mayor (horizontal)
+inline const double CAMERA_ORBIT_RZ = 6.0;  // semi-eje menor (profundidad)
+inline const double CAMERA_ORBIT_Y  = 0.0;  // altura fija de la cámara
 
 // ============================================================================
 // DIRECTORIOS Y ARCHIVOS DE SALIDA
