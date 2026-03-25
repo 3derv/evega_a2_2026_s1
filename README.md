@@ -1,103 +1,134 @@
-# Proyecto Individual: Framework Experimental de Modelos de Ejecución Multithreading
+# Framework Experimental de Modelos de Ejecución Multithreading
 
-## ¿Qué encontrarás aquí?
-Código en C++17 para comparar distintos modelos de ejecución concurrente usando ray tracing como problema base.
+Comparación de modelos de ejecución concurrente usando ray tracing como carga de trabajo.
+Cada modelo simula cómo un procesador organiza sus threads y maneja los stalls de memoria.
 
-Modelos implementados:
-- **Sequential**: Ejecución secuencial (línea base)
-- **FGMT**: Fine-Grained Multithreading (4 threads, quantum por píxel, cache stall simulation)
+## Modelos implementados
 
-Modelos en desarrollo:
-- CGMT: Coarse-Grained Multithreading
-- SMT: Simultaneous Multithreading
-- CMP: Chip MultiProcessing
+| Modelo | Scheduler | Rotación | Costo stall |
+|--------|-----------|----------|--------------|
+| **Sequential** | Ninguno (1 hilo) | — | `CACHE_MISS_PENALTY_NS = 3200 ns` (stall completo) |
+| **FGMT** | Reloj global (`clock % NUM_THREADS == tid`) | Cada ciclo (obligatoria) | `NOP_PENALTY_NS = 100 ns` (stall oculto) |
+| **CGMT** | `current_thread` + `switch_to_next_thread()` | Solo en stall | `PIXEL_QUANTUM_NS + CONTEXT_SWITCH_COST_NS = 1400 ns` |
+
+Modelos en desarrollo: SMT, CMP.
 
 ## Estructura del proyecto
+
 ```
 .
-├── src/                    # Código fuente implementacio
-├── include/                # Headers (interfaz + implementación)
-├── build/                  # Archivos compilados (generado)
-├── docs/                   # Documentación (instructions.md)
-├── scripts/                # Scripts para mediciones/gráficas
-├── results/                # Salidas (CSV, imágenes, gráficas)
-├── CMakeLists.txt          # Configuración de compilación
-└── README.md              # Este archivo
+├── src/                        # Implementaciones (.cpp)
+│   ├── main.cpp                # CLI, Factory, GenericRunner, salida de stats
+│   ├── SequentialRenderer.cpp  # Modelo baseline
+│   ├── FinegrainedRenderer.cpp # Modelo FGMT con reloj global explícito
+│   ├── CoarseRenderer.cpp      # Modelo CGMT con scheduler round-robin
+│   └── Exporter.cpp            # Guardar PPM e imagen CSV
+├── include/                    # Headers
+│   ├── IRenderer.h             # Interfaz abstracta (polimorfismo)
+│   ├── RendererFactory.h       # Factory con registry map (OCP)
+│   ├── GenericRunner.h         # Orquestador universal de mediciones (DIP)
+│   ├── RendererUtils.h         # Helpers compartidos DRY (reset, sum_vt)
+│   ├── Ray.h                   # Ray + make_ray() compartida (DRY)
+│   ├── CacheModel.h            # Simulador de cache miss con localidad espacial
+│   ├── Constants.h             # Constantes centralizadas (dimensiones, rutas, VT)
+│   └── Metrics.h               # Structs ThreadMetrics / Metrics
+├── scripts/                    # Scripts de medición y análisis
+├── results/                    # CSVs, imágenes PPM, gráficas PNG, log
+├── docs/                       # instructions.md (reglas del proyecto)
+├── CMakeLists.txt
+└── README.md
 ```
 
-## Uso básico
+## Uso rápido
 
-### Compilar
+### 1. Compilar
+
 ```bash
 mkdir -p build && cd build
-cmake .. && make
+cmake .. && make -j4
 cd ..
 ```
 
-### Ejecutar un modelo
+### 2. Ejecutar un modelo
+
 ```bash
-# Sequential (defecto)
-./build/raytracer --runs 200
-
-# FGMT
-./build/raytracer --model fgmt --runs 200
-
-# Ver ayuda
+./build/raytracer --model sequential --runs 200
+./build/raytracer --model fgmt      --runs 200
+./build/raytracer --model cgmt      --runs 200
 ./build/raytracer --help
 ```
 
-### Ejecutar con mediciones automáticas
-FGMT (200 runs + gráficas):
+Salida por stdout incluye: tiempo real (avg/min/max/stddev), tiempo virtual (ns),
+stalls promedio, CPI y estadísticas por thread (FGMT y CGMT).
+
+### 3. Ejecutar todos los modelos y generar análisis completo
+
 ```bash
-./scripts/run_mediciones_fgmt.sh
+# Uso recomendado — compila, ejecuta los 3 modelos, valida imágenes y genera gráficas
+./scripts/run_all_models.sh          # 200 runs (por defecto)
+./scripts/run_all_models.sh 500      # número de runs personalizado
 ```
 
-Sequential (200 runs + gráficas):
+Genera en `results/`:
+- `mediciones_secuencial.csv`, `mediciones_fgmt.csv`, `mediciones_cgmt.csv`
+- `speedup_report.log` — reporte de speedup, stalls, CPI e información PPM
+- `graficas/` — 5 gráficas PNG comparativas
+- `image/` — `frame_*.ppm` de cada modelo (deben ser byte-exactas)
+
+### 4. Ejecutar un solo modelo con script individual
+
 ```bash
-./scripts/run_mediciones_secuencial.sh
+./scripts/run_mediciones_secuencial.sh   # sequential, genera gráfica propia
+./scripts/run_mediciones_fgmt.sh         # fgmt vs sequential
+./scripts/run_mediciones_cgmt.sh         # sequential + fgmt + cgmt
 ```
 
-### Generar gráficas desde CSV existente
+### 5. Análisis desde CSVs existentes
+
 ```bash
+# Reporte de speedup + gráficas (requiere los 3 CSVs ya generados)
+python3 scripts/analizar_speedup.py \
+    results/mediciones_secuencial.csv \
+    results/mediciones_fgmt.csv \
+    results/mediciones_cgmt.csv \
+    --graphs results/graficas \
+    --log    results/speedup_report.log
+
+# Gráfica individual desde un CSV
 python3 scripts/generar_graficas.py results/mediciones_fgmt.csv
-python3 scripts/generar_graficas.py results/mediciones_secuencial.csv
 ```
+
+## Reloj virtual
+
+Cada modelo acumula tiempo virtual (ns) para modelar la carga sobre el pipeline,
+independientemente del tiempo real del SO.
+
+| Constante | Valor | Descripción |
+|-----------|-------|-------------|
+| `PIXEL_QUANTUM_NS` | 1000 ns | 1 slot de pipeline = 10 ciclos × 100 ns |
+| `NOP_PENALTY_NS` | 100 ns | 1 ciclo NOP (FGMT: detección de miss) |
+| `CACHE_MISS_PENALTY_NS` | 3200 ns | Stall completo = 32 NOPs (Solo Sequential) |
+| `CONTEXT_SWITCH_COST_NS` | 400 ns | Overhead de context switch (Solo CGMT) |
+
+**CPI reportado**: `virtual_time_ns / (NOP_PENALTY_NS × total_pixels)`. CPI ideal = 10.0.
 
 ## Arquitectura de software
 
-El proyecto sigue **principios SOLID**:
-- **S**ingle Responsibility: Cada clase tiene una responsabilidad (Renderer, Exporter, CacheModel, etc.)
-- **O**pen/Closed: Extensible vía Factory Pattern para agregar nuevos modelos
-- **L**iskov Substitution: Todos los renderers heredan de `IRenderer` (polimorfismo)
-- **I**nterface Segregation: Interfaces específicas y cohesivas
-- **D**ependency Inversion: Depende de abstracciones (`IRenderer`), no de clases concretas
-
-Componentes clave:
-- `IRenderer`: Interfaz abstract para todos los modelos
-- `SequentialRenderer`: Modelo secuencial
-- `FinegrainedRenderer`: Modelo FGMT con 4 threads
-- `RendererFactory`: Factory para creación dinámica de renderers
-- `GenericRunner`: Orquestador genérico de mediciones
-- `CacheModel`: Simulador de cache hits/misses con localidad espacial
-
-## Resultado de mediciones (ejemplo)
-
-**Sequential** (200 runs):
-- Promedio: ~0.006 segundos
-- Desv.Est: ~0.0001 segundos
-
-**FGMT** (200 runs, 4 threads):
-- Promedio: ~0.007 segundos
-- Desv.Est: ~0.0008 segundos
-- NOPs por thread: ~4,000-4,400 (32 NOPs × ~130-138 cache misses)
+- **SOLID** — `RendererFactory` usa registry map (OCP); `GenericRunner` depende de `IRenderer` (DIP); `switch_to_next_thread()` extrae responsabilidad del scheduler (SRP).
+- **DRY** — `make_ray()` en `Ray.h` compartida por los 3 renderers; `reset_thread_stats()` y `sum_virtual_times()` en `RendererUtils.h`; rutas de archivos resueltas una sola vez en `Exporter`.
 
 ## Cómo agregar un nuevo modelo
 
-1. Crear clase que herede de `IRenderer`:
-```cpp
-class YourRenderer : public IRenderer {
-public:
-    std::vector<Vector3> render_frame() override { ... }
+1. Crear `include/MiRenderer.h` y `src/MiRenderer.cpp` heredando de `IRenderer`.
+2. Agregar **una entrada** en `available_registry()` de `RendererFactory.h`:
+   ```cpp
+   {"mimodelo", [] { return std::make_unique<MiRenderer>(); }},
+   ```
+3. Agregar las rutas en `Constants.h` (`IMAGE_FILE_*`, `CSV_FILE_*`).
+4. Agregar el source en `CMakeLists.txt`.
+
+No es necesario modificar `main.cpp`, `GenericRunner`, `Exporter` ni ningún otro archivo.
+
     std::string get_model_name() const override { return "yourmodel"; }
 };
 ```
