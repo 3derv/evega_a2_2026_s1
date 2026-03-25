@@ -64,10 +64,12 @@ public:
 
     // Retorna mensaje de ayuda con modelos disponibles.
     static std::string get_help_message() {
-        return "Usage: ./raytracer [--model MODEL] [--runs N]\n"
+        return "Usage: ./raytracer [--model MODEL] [--runs N] [--verbose N]\n"
                "Models available: sequential, fgmt, cgmt, smt\n"
                "Models in development: cmp\n"
-               "Example: ./raytracer --model smt --runs 200\n";
+               "Options:\n"
+               "  --verbose N   Imprimir los primeros N ciclos del scheduler (solo SMT)\n"
+               "Example: ./raytracer --model smt --runs 1 --verbose 30\n";
     }
 };
 

@@ -2,6 +2,8 @@
 #include "Constants.h"
 #include "Ray.h"
 #include "RendererUtils.h"
+#include <iomanip>
+#include <sstream>
 
 using namespace constants;
 using namespace trace;
@@ -27,6 +29,10 @@ SMTRenderer::SMTRenderer()
     dispatch_flags_.resize(SMT_NUM_THREADS, false);
     stall_ns_.resize(SMT_NUM_THREADS, 0LL);
     thread_finished_.resize(SMT_NUM_THREADS, false);
+    log_stage_.resize(SMT_NUM_THREADS, 0);
+    log_pixel_.resize(SMT_NUM_THREADS, 0);
+    for (int i = 0; i < SMT_NUM_THREADS; ++i)
+        log_pixel_[i] = tasks_[i].start;
 }
 
 // render_worker: ciclo de vida del contexto hardware SMT para el thread tid.
@@ -132,7 +138,9 @@ void SMTRenderer::render_worker(int tid) {
                 // porque son ocultados por el trabajo de otro thread.
                 thread_stats_[tid].virtual_time_ns += STAGE_QUANTUM_NS;
             }
-
+            // Actualizar estado de logging para que el coordinador lo muestre
+            log_stage_[tid] = stage;
+            log_pixel_[tid] = pixel_idx;
             if (pixel_idx >= pixel_end)
                 thread_finished_[tid] = true;
 
@@ -161,6 +169,8 @@ std::vector<Vector3> SMTRenderer::render_frame() {
         dispatch_flags_[i]   = false;
         stall_ns_[i]         = 0LL;
         thread_finished_[i]  = false;
+        log_stage_[i]        = 0;
+        log_pixel_[i]        = tasks_[i].start;
     }
     slots_to_complete_ = 0;
     slots_completed_   = 0;
@@ -171,6 +181,13 @@ std::vector<Vector3> SMTRenderer::render_frame() {
     std::vector<std::thread> workers;
     for (int i = 0; i < SMT_NUM_THREADS; ++i)
         workers.emplace_back(&SMTRenderer::render_worker, this, i);
+
+    if (verbose_cycles_ > 0) {
+        std::cout << "\n[SMT VERBOSE] issue_width=" << SMT_ISSUE_WIDTH
+                  << "  threads=" << SMT_NUM_THREADS
+                  << "  stage_quantum=" << STAGE_QUANTUM_NS << "ns\n";
+        std::cout << std::string(72, '-') << "\n";
+    }
 
     // ── CICLO DE HARDWARE ──────────────────────────────────────────────────
     // Cada iteración = 1 ciclo de reloj simulado.
@@ -224,6 +241,32 @@ std::vector<Vector3> SMTRenderer::render_frame() {
                 if (!thread_finished_[i] && stall_ns_[i] > 0)
                     stall_ns_[i] = std::max(0LL, stall_ns_[i] - STAGE_QUANTUM_NS);
             }
+
+            // ── LOGGING VERBOSE ─────────────────────────────────────────────
+            // Se imprime TRAS el ciclo (etapa ya ejecutada, stalls ya decrementados).
+            // Formato: [Ciclo N] T0:ETAPA(p=X,stall=Xns) T1:STALL(Xns) T2:DONE
+            if (verbose_cycles_ > 0 && global_clock_ < verbose_cycles_) {
+                std::cout << "[Ciclo " << std::setw(4) << global_clock_ << "] ";
+                for (int i = 0; i < SMT_NUM_THREADS; ++i) {
+                    std::cout << "T" << i << ":";
+                    if (thread_finished_[i]) {
+                        std::cout << "DONE";
+                    } else if (stall_ns_[i] > 0) {
+                        // El counter ya fue decrementado; el stall_ns_ es el restante
+                        std::cout << "STALL(" << stall_ns_[i] << "ns)";
+                    } else {
+                        int px = log_pixel_[i];
+                        int st = log_stage_[i];
+                        std::cout << STAGE_NAMES[st]
+                                  << "(p=" << px
+                                  << ",x=" << (px % IMAGE_WIDTH)
+                                  << ",y=" << (px / IMAGE_WIDTH) << ")";
+                    }
+                    if (i < SMT_NUM_THREADS - 1) std::cout << "  ";
+                }
+                std::cout << "\n";
+            }
+
             global_clock_++;
         }
     }

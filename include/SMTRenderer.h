@@ -43,6 +43,9 @@ class SMTRenderer : public IRenderer {
 public:
     SMTRenderer();
 
+    // Habilitar logging ciclo a ciclo. cycles = número de ciclos a imprimir (0 = off).
+    void set_verbose(int cycles) { verbose_cycles_ = cycles; }
+
     std::vector<Vector3> render_frame() override;
 
     std::string get_model_name() const override { return "smt"; }
@@ -85,6 +88,17 @@ private:
     int  slots_to_complete_ = 0;  // threads despachados en el ciclo actual
     int  slots_completed_   = 0;  // threads que terminaron su etapa este ciclo
     bool coordinator_done_  = false; // señal de fin del coordinador a los workers
+
+    // ── Logging verbose ───────────────────────────────────────────────────
+    // Actualizado por cada worker bajo dispatch_mutex_ al terminar su etapa.
+    // El coordinador lo lee al inicio del ciclo siguiente para imprimir el log.
+    int              verbose_cycles_ = 0;  // 0 = off; N = imprimir primeros N ciclos
+    std::vector<int> log_stage_;           // etapa actual de cada thread
+    std::vector<int> log_pixel_;           // pixel_idx actual de cada thread
+    // Etiquetas legibles para las etapas del pipeline
+    static constexpr const char* STAGE_NAMES[] = {
+        "RAY_GEN", "INTERSECT_0", "INTERSECT_1", "INTERSECT_2", "SHADE"
+    };
 
     // render_worker: ciclo de vida de cada contexto hardware SMT.
     // Espera dispatch_flags_[tid], ejecuta su etapa actual (RAY_GEN/INTERSECT/SHADE),

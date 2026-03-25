@@ -1,21 +1,25 @@
 #include "Constants.h"
 #include "GenericRunner.h"
 #include "RendererFactory.h"
+#include "SMTRenderer.h"
 #include <iostream>
 #include <string>
 #include <stdexcept>
 
 int main(int argc, char* argv[]) {
-    int num_runs = 1;
+    int num_runs  = 1;
+    int verbose   = 0;    // ciclos a imprimir con --verbose N (solo SMT)
     std::string model = "sequential";  // Modelo por defecto
     
-    // Parsear argumentos: --model {sequential|fgmt|...} --runs N
+    // Parsear argumentos: --model {sequential|fgmt|...} --runs N [--verbose N]
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--model" && i + 1 < argc) {
             model = argv[++i];
         } else if (arg == "--runs" && i + 1 < argc) {
             num_runs = std::stoi(argv[++i]);
+        } else if (arg == "--verbose" && i + 1 < argc) {
+            verbose = std::stoi(argv[++i]);
         } else if (arg == "--help" || arg == "-h") {
             std::cout << RendererFactory::get_help_message();
             return 0;
@@ -26,6 +30,14 @@ int main(int argc, char* argv[]) {
         // Crear renderer usando Factory Pattern
         auto renderer = RendererFactory::create(model);
         std::string model_name = renderer->get_model_name();
+
+        // Activar verbose si se pidió y el modelo es SMT
+        if (verbose > 0) {
+            if (auto* smt = dynamic_cast<SMTRenderer*>(renderer.get()))
+                smt->set_verbose(verbose);
+            else
+                std::cerr << "Advertencia: --verbose solo tiene efecto con --model smt\n";
+        }
         
         // Ejecutar mediciones
         trace::GenericRunner runner(std::move(renderer), num_runs, model);
