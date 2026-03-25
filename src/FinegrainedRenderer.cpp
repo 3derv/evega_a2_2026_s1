@@ -1,7 +1,7 @@
 #include "FinegrainedRenderer.h"
 #include "Constants.h"
 #include "Ray.h"
-#include <iostream>
+#include "RendererUtils.h"
 
 using namespace constants;
 using namespace trace;
@@ -23,125 +23,94 @@ FinegrainedRenderer::FinegrainedRenderer()
         cache_models[i] = CacheModel(CACHE_SIZE);
 
     thread_stats.resize(NUM_THREADS);
-    pixel_queues.resize(NUM_THREADS);
-    thread_done_flags.resize(NUM_THREADS, false);
-
     for (int i = 0; i < NUM_THREADS; ++i)
         thread_stats[i].thread_id = i;
 }
 
-// Worker: ejecuta la cola de píxeles del tile con scheduler round-robin.
-// FGMT: cede el pipeline tras CADA quantum (a diferencia de CGMT que solo cede en stall).
-// Stall → pixel diferido como prefetched; pipeline cedido al siguiente contexto.
+// Worker: ejecuta el scheduler FGMT con reloj global explícito.
+//
+// Mecanismo (idéntico al código de referencia en C):
+//   - El thread bloquea en clock_tick_ hasta que global_clock_ % NUM_THREADS == thread_id.
+//   - Al despertar, ejecuta UN ciclo de pipeline:
+//       COMPUTE   — renderiza el pixel actual y avanza al siguiente.
+//       NOP/STALL — consume el slot pero el pixel se reintenta el próximo turno.
+//       IDLE      — el tile ya terminó; sigue participando para no bloquear el clock.
+//   - Incrementa global_clock_ y hace notify_all() para despertar al siguiente thread.
+//
+// La diferencia clave con CGMT: en FGMT la rotación es SIEMPRE cada ciclo,
+// no solo en stalls. El costo del stall completo (3200 ns) queda oculto porque
+// mientras este thread espera memoria otro contexto ocupa el pipeline.
 void FinegrainedRenderer::render_tile_worker(int thread_id) {
-    ThreadMetrics& stats = thread_stats[thread_id];
-    CacheModel&    cache = cache_models[thread_id];
-    auto&          queue = pixel_queues[thread_id];
+    ThreadMetrics&    stats = thread_stats[thread_id];
+    CacheModel&       cache = cache_models[thread_id];
+    const ThreadTile& tile  = tiles[thread_id];
+
+    int  x            = tile.x_start;
+    int  y            = tile.y_start;
+    bool my_work_done = false;
 
     while (true) {
-        // ────────────────────────────────────────────────────────────────
-        // 1. ESPERAR TURNO EN EL PIPELINE (round-robin)
-        // ────────────────────────────────────────────────────────────────
-        {
-            std::unique_lock<std::mutex> lock(pipeline_mutex);
-            while (pipeline_owner != thread_id)
-                pipeline_cv.wait(lock);
-        }
+        std::unique_lock<std::mutex> lock(pipeline_mutex_);
 
-        // ────────────────────────────────────────────────────────────────
-        // 2. ¿QUEDAN PÍXELES? SI NO, LIBERAR PIPELINE Y TERMINAR
-        // ────────────────────────────────────────────────────────────────
-        if (queue.empty()) {
-            std::unique_lock<std::mutex> lock(pipeline_mutex);
-            thread_done_flags[thread_id] = true;
-            active_threads_count--;
-            if (active_threads_count > 0) {
-                int next     = (thread_id + 1) % NUM_THREADS;
-                int attempts = 0;
-                while (thread_done_flags[next] && attempts < NUM_THREADS) {
-                    next = (next + 1) % NUM_THREADS;
-                    ++attempts;
+        // Salida anticipada: todos los threads completaron su tile
+        if (threads_completed_ == NUM_THREADS) break;
+
+        // FGMT round-robin: esperar el ciclo de este thread.
+        // Condición de despertar: es mi turno O ya todos terminaron.
+        clock_tick_.wait(lock, [&] {
+            return (global_clock_ % NUM_THREADS) == thread_id
+                || threads_completed_ == NUM_THREADS;
+        });
+
+        if (threads_completed_ == NUM_THREADS) break;
+
+        if (!my_work_done) {
+            if (cache.is_cache_miss(x, y)) {
+                // STALL/NOP: el slot se consume pero el pixel no avanza.
+                // El stall completo (3200 ns) queda oculto — otro contexto
+                // ejecuta mientras este espera la memoria.
+                stats.virtual_time_ns += NOP_PENALTY_NS;
+                stats.nops_count++;
+                stats.cache_misses++;
+            } else {
+                // COMPUTE: renderizar pixel y avanzar al siguiente
+                frame[y * IMAGE_WIDTH + x] = scene.trace(make_ray(x, y));
+                stats.virtual_time_ns += PIXEL_QUANTUM_NS;
+
+                x++;
+                if (x >= tile.x_end) { x = tile.x_start; y++; }
+                if (y >= tile.y_end) {
+                    my_work_done = true;
+                    threads_completed_++;  // atómico bajo el mutex
                 }
-                pipeline_owner = next;
             }
-            pipeline_cv.notify_all();
-            return;
-        }
-
-        // ────────────────────────────────────────────────────────────────
-        // 3. PROCESAR SIGUIENTE PIXEL
-        // ────────────────────────────────────────────────────────────────
-        PixelTask task = queue.front();
-        queue.pop_front();
-
-        if (!task.prefetched && cache.is_cache_miss(task.x, task.y)) {
-            // STALL: 1 NOP (ciclo de pipeline desperdiciado) + diferir pixel.
-            // El pixel se reencola como "prefetched": en su próximo turno se
-            // calculará sin reintentar el check de cache (dato ya en memoria).
-            stats.virtual_time_ns += NOP_PENALTY_NS;
-            stats.nops_count++;
-            stats.cache_misses++;  // = stall_count por thread
-            queue.push_back({task.x, task.y, true});
         } else {
-            // HIT o prefetched: calcular pixel normalmente
-            double u      = (2.0 * task.x / IMAGE_WIDTH)  - 1.0;
-            double v      = 1.0 - (2.0 * task.y / IMAGE_HEIGHT);
-            double aspect = (double)IMAGE_WIDTH / IMAGE_HEIGHT;
-            Vector3 origin(0, 0, 0);
-            Vector3 direction(u * aspect, v, -1);
-            Ray ray(origin, direction);
-            frame[task.y * IMAGE_WIDTH + task.x] = scene.trace(ray);
-            stats.virtual_time_ns += PIXEL_QUANTUM_NS;
+            // IDLE: tile terminado, pero el thread sigue en el pipeline
+            // para que los demás contextos obtengan su turno (no bloquear el clock).
+            stats.virtual_time_ns += NOP_PENALTY_NS;
         }
 
-        // ────────────────────────────────────────────────────────────────
-        // 4. YIELD OBLIGATORIO: FGMT cede el pipeline tras cada quantum.
-        //    Si solo queda este thread activo, next == thread_id → continúa.
-        // ────────────────────────────────────────────────────────────────
-        {
-            std::unique_lock<std::mutex> lock(pipeline_mutex);
-            int next     = (thread_id + 1) % NUM_THREADS;
-            int attempts = 0;
-            while (thread_done_flags[next] && attempts < NUM_THREADS) {
-                next = (next + 1) % NUM_THREADS;
-                ++attempts;
-            }
-            pipeline_owner = next;
-            pipeline_cv.notify_all();
-        }
+        // Avanzar el reloj global y despertar al siguiente thread
+        global_clock_++;
+        clock_tick_.notify_all();
     }
 }
 
 std::vector<Vector3> FinegrainedRenderer::render_frame() {
-    for (int i = 0; i < NUM_THREADS; ++i) {
-        cache_models[i].reset();
-        thread_stats[i].nops_count      = 0;
-        thread_stats[i].nop_time_ns     = 0.0;
-        thread_stats[i].cache_misses    = 0;
-        thread_stats[i].virtual_time_ns = 0LL;
-        thread_done_flags[i]            = false;
-        pixel_queues[i].clear();
+    reset_thread_stats(thread_stats, cache_models);
+    virtual_time_ns_   = 0LL;
+    global_clock_      = 0;
+    threads_completed_ = 0;
 
-        // Poblar cola de píxeles del tile asignado
-        const ThreadTile& tile = tiles[i];
-        for (int y = tile.y_start; y < tile.y_end; ++y)
-            for (int x = tile.x_start; x < tile.x_end; ++x)
-                pixel_queues[i].push_back({x, y, false});
-    }
-
-    pipeline_owner       = 0;
-    active_threads_count = NUM_THREADS;
-    virtual_time_ns_     = 0LL;
-
-    // Lanzar threads — cada uno espera turno en el pipeline round-robin
     std::vector<std::thread> threads;
     for (int i = 0; i < NUM_THREADS; ++i)
         threads.emplace_back(&FinegrainedRenderer::render_tile_worker, this, i);
     for (auto& t : threads) t.join();
 
-    // Tiempo virtual = SUMA (1 pipeline compartido: todos los quanta son seriales)
-    for (int i = 0; i < NUM_THREADS; ++i)
-        virtual_time_ns_ += thread_stats[i].virtual_time_ns;
+    // VT total = SUMA de los cuatro contexts (pipeline compartido, no paralelo).
+    // Cada ciclo solo 1 context ejecuta; la suma equivale a los ciclos totales
+    // multiplicados por el costo promedio por ciclo.
+    virtual_time_ns_ = sum_virtual_times(thread_stats);
 
     return frame;
 }

@@ -6,16 +6,29 @@
 #include "CacheModel.h"
 #include "Metrics.h"
 #include <vector>
-#include <deque>
 #include <thread>
 #include <mutex>
 #include <condition_variable>
 
-// FinegrainedRenderer: Renderizador FGMT (Fine-Grained Multithreading).
-// Modela 1 pipeline compartido con 4 contextos en round-robin.
-// Diferencias clave vs CGMT:
-//   - Yield obligatorio tras CADA quantum (no solo en stall).
-//   - Pixel con stall se difiere como "prefetched"; pipeline cede al siguiente contexto.
+// FinegrainedRenderer: modelo FGMT (Fine-Grained Multithreading).
+//
+// Simula 1 pipeline con NUM_THREADS contextos de hardware usando un
+// RELOJ GLOBAL EXPLÏCITO: cada thread avanza solo cuando
+//   global_clock_ % NUM_THREADS == thread_id
+// Esto replica el round-robin obligatorio del hardware FGMT, donde el
+// pipeline rota entre contextos en cada ciclo sin importar stalls.
+//
+// Comportamiento por ciclo asignado al thread:
+//   Sin stall : COMPUTE — renderiza el pixel y avanza al siguiente
+//                          (+PIXEL_QUANTUM_NS al VT del thread)
+//   Con stall : NOP     — el slot se consume pero el pixel se reintenta
+//                          (+NOP_PENALTY_NS; el stall completo queda oculto
+//                           porque otro contexto ejecutara mientras espera)
+//   IDLE      : el thread termino su tile pero sigue en el pipeline
+//               para que los demas puedan obtener su turno
+//                          (+NOP_PENALTY_NS por slot ocupado)
+//
+// Tiempo virtual = SUMA de los cuatro threads (pipeline compartido).
 class FinegrainedRenderer : public IRenderer {
 private:
     Scene scene;
@@ -23,7 +36,6 @@ private:
     std::vector<CacheModel>           cache_models;
     std::vector<trace::ThreadMetrics> thread_stats;
 
-    // Límites del tile asignado a cada thread
     struct ThreadTile {
         int x_start, x_end;
         int y_start, y_end;
@@ -31,18 +43,15 @@ private:
     };
     std::vector<ThreadTile> tiles;
 
-    // Cola de tareas por thread. prefetched=true → stall ya fue pagado, no reintentar cache.
-    struct PixelTask { int x, y; bool prefetched; };
-    std::vector<std::deque<PixelTask>> pixel_queues;
-
-    // Scheduler round-robin: 1 pipeline, 4 contextos
-    std::mutex              pipeline_mutex;
-    std::condition_variable pipeline_cv;
-    int                     pipeline_owner       = 0;
-    int                     active_threads_count = 0;
-    std::vector<bool>       thread_done_flags;
-
     long long virtual_time_ns_ = 0LL;
+
+    // Scheduler FGMT: reloj global compartido entre todos los threads.
+    // Un thread solo avanza cuando global_clock_ % NUM_THREADS == su thread_id.
+    // Esto serializa la ejecucion en ciclos de pipeline: 1 thread por ciclo.
+    int global_clock_       = 0;
+    int threads_completed_  = 0;
+    std::mutex              pipeline_mutex_;
+    std::condition_variable clock_tick_;
 
     void render_tile_worker(int thread_id);
 
