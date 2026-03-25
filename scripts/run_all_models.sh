@@ -15,7 +15,7 @@ LOG_FILE="$RESULTS_DIR/speedup_report.log"
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════════════╗"
-echo "║  MEDICIONES COMPARATIVAS: SEQUENTIAL vs FGMT vs CGMT            ║"
+echo "║  MEDICIONES COMPARATIVAS: SEQUENTIAL vs FGMT vs CGMT vs SMT     ║"
 echo "║  Runs: $NUM_RUNS                                                  ║"
 echo "╚══════════════════════════════════════════════════════════════════╝"
 echo ""
@@ -34,33 +34,40 @@ echo "    ✓ Compilación lista"
 
 # ─── 2. Sequential ───────────────────────────────────────────────────────────
 echo ""
-echo "[2/6] Ejecutando $NUM_RUNS mediciones SEQUENTIAL..."
+echo "[2/7] Ejecutando $NUM_RUNS mediciones SEQUENTIAL..."
 timeout 600 ./build/raytracer --model sequential --runs "$NUM_RUNS" > /tmp/seq_output.txt 2>&1
 echo "    ✓ Sequential completado"
 
 # ─── 3. FGMT ─────────────────────────────────────────────────────────────────
 echo ""
-echo "[3/6] Ejecutando $NUM_RUNS mediciones FGMT..."
+echo "[3/7] Ejecutando $NUM_RUNS mediciones FGMT..."
 timeout 600 ./build/raytracer --model fgmt --runs "$NUM_RUNS" > /tmp/fgmt_output.txt 2>&1
 echo "    ✓ FGMT completado"
 
 # ─── 4. CGMT ─────────────────────────────────────────────────────────────────
 echo ""
-echo "[4/6] Ejecutando $NUM_RUNS mediciones CGMT..."
+echo "[4/7] Ejecutando $NUM_RUNS mediciones CGMT..."
 timeout 600 ./build/raytracer --model cgmt --runs "$NUM_RUNS" > /tmp/cgmt_output.txt 2>&1
 echo "    ✓ CGMT completado"
 
-# ─── 5. Validación de correctness ────────────────────────────────────────────
+# ─── 5. SMT ──────────────────────────────────────────────────────────────────
 echo ""
-echo "[5/6] Validando correctness (diff de imágenes)..."
+echo "[5/7] Ejecutando $NUM_RUNS mediciones SMT..."
+timeout 600 ./build/raytracer --model smt --runs "$NUM_RUNS" > /tmp/smt_output.txt 2>&1
+echo "    ✓ SMT completado"
+
+# ─── 6. Validación de correctness ────────────────────────────────────────────
+echo ""
+echo "[5/7] Validando correctness (diff de imágenes)..."
 
 IMG_SEQ="$RESULTS_DIR/image/frame_secuencial.ppm"
 IMG_FGMT="$RESULTS_DIR/image/frame_fgmt.ppm"
 IMG_CGMT="$RESULTS_DIR/image/frame_cgmt.ppm"
+IMG_SMT="$RESULTS_DIR/image/frame_smt.ppm"
 
 ALL_OK=true
 
-for IMG in "$IMG_FGMT" "$IMG_CGMT"; do
+for IMG in "$IMG_FGMT" "$IMG_CGMT" "$IMG_SMT"; do
     MODEL_NAME=$(basename "$IMG" .ppm | sed 's/frame_//')
     if diff -q "$IMG_SEQ" "$IMG" > /dev/null 2>&1; then
         echo "    ✓ $MODEL_NAME == sequential (byte-exact)"
@@ -76,9 +83,9 @@ if [ "$ALL_OK" = false ]; then
     echo "    Los speed ups pueden no ser comparables."
 fi
 
-# ─── 6. Análisis de speed up y gráficas ──────────────────────────────────────
+# ─── 7. Análisis de speed up y gráficas ──────────────────────────────────────
 echo ""
-echo "[6/6] Generando análisis de speed up y gráficas..."
+echo "[7/7] Generando análisis de speed up y gráficas..."
 
 mkdir -p "$GRAPHS_DIR"
 
@@ -87,6 +94,7 @@ if command -v python3 &> /dev/null; then
         "$RESULTS_DIR/mediciones_secuencial.csv" \
         "$RESULTS_DIR/mediciones_fgmt.csv" \
         "$RESULTS_DIR/mediciones_cgmt.csv" \
+        "$RESULTS_DIR/mediciones_smt.csv" \
         --graphs "$GRAPHS_DIR" \
         --log "$LOG_FILE"
     echo "    ✓ Análisis guardado en: $LOG_FILE"
@@ -105,6 +113,7 @@ echo "Resultados en: $RESULTS_DIR"
 echo "  ├─ mediciones_secuencial.csv"
 echo "  ├─ mediciones_fgmt.csv"
 echo "  ├─ mediciones_cgmt.csv"
+echo "  ├─ mediciones_smt.csv"
 echo "  ├─ speedup_report.log"
 echo "  ├─ graficas/"
 echo "  │  ├─ 01_histogram_comparativo.png"
@@ -115,5 +124,6 @@ echo "  │  └─ 05_virtual_time_comparison.png"
 echo "  └─ image/"
 echo "     ├─ frame_secuencial.ppm"
 echo "     ├─ frame_fgmt.ppm"
-echo "     └─ frame_cgmt.ppm"
+echo "     ├─ frame_cgmt.ppm"
+echo "     └─ frame_smt.ppm"
 echo ""
