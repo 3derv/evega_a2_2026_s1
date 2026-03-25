@@ -99,7 +99,7 @@ void CoarseRenderer::render_worker(int thread_id) {
         } else {
             // ── COMPUTE ────────────────────────────────────────────────────
             // Renderizar pixel y avanzar al siguiente de este tile
-            frame[pixel_idx] = scene.trace(make_ray(x, y));
+            frame[pixel_idx] = scene.trace(make_ray(x, y, camera_pos_));
             stats.virtual_time_ns += PIXEL_QUANTUM_NS;
             global_clock_++;
             pixel_idx++;

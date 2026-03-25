@@ -5,6 +5,7 @@
 #include "Scene.h"
 #include "CacheModel.h"
 #include "Metrics.h"
+#include "Ray.h"
 #include <vector>
 #include <thread>
 #include <mutex>
@@ -52,6 +53,10 @@ private:
 
     long long virtual_time_ns_ = 0LL;
 
+    // Posición de cámara para el frame actual (actualizada por GenericRunner).
+    // Permite recibir la órbita elíptica sin modificar el scheduler CGMT.
+    Vector3 camera_pos_;
+
     // switch_to_next_thread(): Scheduler hardware CGMT.
     // Busca el siguiente thread activo (round-robin, saltando los terminados).
     // Debe llamarse mientras se sostiene sched_mutex.
@@ -60,6 +65,11 @@ private:
 
 public:
     CoarseRenderer();
+
+    // Actualiza la posición de cámara antes de render_frame().
+    // GenericRunner la llama una vez por frame; el scheduler CGMT no cambia.
+    void set_camera_pos(const Vector3& pos) override { camera_pos_ = pos; }
+
     std::vector<Vector3> render_frame() override;
     std::string get_model_name() const override { return "cgmt"; }
     const std::vector<trace::ThreadMetrics>& get_thread_metrics() const override {
