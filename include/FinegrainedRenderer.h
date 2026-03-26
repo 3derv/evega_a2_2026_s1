@@ -6,28 +6,28 @@
 #include "CacheModel.h"
 #include "Metrics.h"
 #include "Ray.h"
+#include "Constants.h"
 #include <vector>
 #include <thread>
-#include <mutex>
-#include <condition_variable>
+#include <atomic>
+#include <semaphore.h>
 
 // FinegrainedRenderer: modelo FGMT (Fine-Grained Multithreading).
 //
-// Simula 1 pipeline con NUM_THREADS contextos de hardware usando un
-// RELOJ GLOBAL EXPLÏCITO: cada thread avanza solo cuando
-//   global_clock_ % NUM_THREADS == thread_id
-// Esto replica el round-robin obligatorio del hardware FGMT, donde el
-// pipeline rota entre contextos en cada ciclo sin importar stalls.
+// Simula 1 pipeline con NUM_THREADS contextos de hardware.
+// Scheduler: semáforo por thread — cada thread espera en su propio
+// sem_wait() y, al terminar su ciclo, señala directamente al siguiente
+// thread con píxeles pendientes (skip de IDLE).
 //
-// Comportamiento por ciclo asignado al thread:
-//   Sin stall : COMPUTE — renderiza el pixel y avanza al siguiente
-//                          (+PIXEL_QUANTUM_NS al VT del thread)
-//   Con stall : NOP     — el slot se consume pero el pixel se reintenta
-//                          (+NOP_PENALTY_NS; el stall completo queda oculto
-//                           porque otro contexto ejecutara mientras espera)
-//   IDLE      : el thread termino su tile pero sigue en el pipeline
-//               para que los demas puedan obtener su turno
-//                          (+NOP_PENALTY_NS por slot ocupado)
+// Esto elimina los spurious wakeups que generaba notify_all():
+//   Antes : notify_all() → wakeup × NUM_THREADS × 192 000 ciclos
+//   Ahora : sem_post(next) → 1 wakeup × ciclos_activos
+//
+// Comportamiento por ciclo:
+//   Sin stall : COMPUTE — renderiza el pixel y avanza (+PIXEL_QUANTUM_NS)
+//   Con stall : NOP     — stall oculto; otro contexto toma el pipeline
+//                          (+NOP_PENALTY_NS)
+//   IDLE      : el thread duerme hasta broadcast final (no consume VT)
 //
 // Tiempo virtual = SUMA de los cuatro threads (pipeline compartido).
 class FinegrainedRenderer : public IRenderer {
@@ -50,13 +50,14 @@ private:
     // Permite que el scheduler reciba la órbita elíptica sin cambiar su lógica.
     Vector3 camera_pos_;
 
-    // Scheduler FGMT: reloj global compartido entre todos los threads.
-    // Un thread solo avanza cuando global_clock_ % NUM_THREADS == su thread_id.
-    // Esto serializa la ejecucion en ciclos de pipeline: 1 thread por ciclo.
-    int global_clock_       = 0;
-    int threads_completed_  = 0;
-    std::mutex              pipeline_mutex_;
-    std::condition_variable clock_tick_;
+    // Scheduler FGMT: semáforo por thread para señalización punto a punto.
+    // slots_[i]: thread i espera aquí su turno de pipeline.
+    // tile_done_[i]: true cuando thread i terminó todos sus píxeles.
+    // threads_completed_: contador atómico; al llegar a NUM_THREADS el
+    //   último thread hace broadcast para desbloquear los demás.
+    sem_t                    slots_[constants::NUM_THREADS];
+    std::atomic<int>         threads_completed_{0};
+    std::atomic<bool>        tile_done_[constants::NUM_THREADS];
 
     void render_tile_worker(int thread_id);
 

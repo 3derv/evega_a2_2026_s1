@@ -1,123 +1,173 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# run_all_models.sh — Ejecuta los 4 modelos (sequential, fgmt, cgmt, smt),
+# verifica 200 frames en cada CSV, valida correctness y genera el reporte
+# de speedup con gráficas.
+#
+# Uso: ./scripts/run_all_models.sh [--skip-smt] [--skip-fgmt]
+#
+# Flags opcionales:
+#   --skip-fgmt  Omitir FGMT (lento: ~102s con semáforos, ~204s legacy)
+#   --skip-smt   Omitir SMT  (lento: varía según implementación)
+#
+# Cada modelo = 1 ejecución = 200 frames de animación (NUM_FRAMES en Constants.h).
+# Timeouts: sequential=60s, cgmt=120s, fgmt=360s, smt=600s.
+set -euo pipefail
 
-# Script unificado: ejecuta los tres modelos (sequential, fgmt, cgmt),
-# valida correctness y genera análisis comparativo de speed up.
-# Uso: ./scripts/run_all_models.sh [NUM_RUNS]
+SKIP_FGMT=false
+SKIP_SMT=false
+for arg in "$@"; do
+    case "$arg" in
+        --skip-fgmt) SKIP_FGMT=true ;;
+        --skip-smt)  SKIP_SMT=true  ;;
+    esac
+done
 
-set -e
-
-NUM_RUNS="${1:-200}"
-PROJECT_ROOT="/home/ederv/tec/p1arqui2/evega_a2_2026_s1"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="$PROJECT_ROOT/build"
 RESULTS_DIR="$PROJECT_ROOT/results"
 GRAPHS_DIR="$RESULTS_DIR/graficas"
 LOG_FILE="$RESULTS_DIR/speedup_report.log"
+SCRIPTS_DIR="$PROJECT_ROOT/scripts"
+EXPECTED_FRAMES=200
 
-# Timeouts por modelo (segundos): estimado conservador del tiempo real por run
-#   Sequential: ~0.1s/run   → margen de 5s/run
-#   FGMT/CGMT:  ~15s/run    → margen de 30s/run (scheduler serializado)
-#   SMT:        ~110s/run   → margen de 200s/run (pipeline de etapas)
-TIMEOUT_SEQ=$(( NUM_RUNS * 5   + 60 ))
-TIMEOUT_MT=$((  NUM_RUNS * 30  + 60 ))
-TIMEOUT_SMT=$(( NUM_RUNS * 200 + 60 ))
-
-echo ""
-echo "╔══════════════════════════════════════════════════════════════════╗"
-echo "║  MEDICIONES COMPARATIVAS: SEQUENTIAL vs FGMT vs CGMT vs SMT     ║"
-echo "║  Runs: $NUM_RUNS                                                  ║"
-echo "╚══════════════════════════════════════════════════════════════════╝"
-echo ""
-
-# ─── 1. Compilar ─────────────────────────────────────────────────────────────
-echo "[1/7] Compilando proyecto (make incremental)..."
-cd "$PROJECT_ROOT"
-mkdir -p "$BUILD_DIR" && cd "$BUILD_DIR"
-cmake .. > /dev/null 2>&1
-# Siempre ejecutar make para detectar cambios en headers o fuentes nuevas.
-# Un binario stale (mezcla de objetos viejos y nuevos) puede causar crashes
-# intermitentes que no aparecen con sanitizers pero sí en producción con -O2.
-make -j4 2>&1 | grep -E "^(\[|error:|warning:)" || true
-cd "$PROJECT_ROOT"
-echo "    ✓ Compilación lista"
-
-# ─── 2. Sequential ───────────────────────────────────────────────────────────
-echo ""
-echo "[2/7] Ejecutando $NUM_RUNS mediciones SEQUENTIAL..."
-timeout "$TIMEOUT_SEQ" ./build/raytracer --model sequential --runs "$NUM_RUNS" > /tmp/seq_output.txt 2>&1
-echo "    ✓ Sequential completado"
-
-# ─── 3. FGMT ─────────────────────────────────────────────────────────────────
-echo ""
-echo "[3/7] Ejecutando $NUM_RUNS mediciones FGMT..."
-timeout "$TIMEOUT_MT" ./build/raytracer --model fgmt --runs "$NUM_RUNS" > /tmp/fgmt_output.txt 2>&1
-echo "    ✓ FGMT completado"
-
-# ─── 4. CGMT ─────────────────────────────────────────────────────────────────
-echo ""
-echo "[4/7] Ejecutando $NUM_RUNS mediciones CGMT..."
-timeout "$TIMEOUT_MT" ./build/raytracer --model cgmt --runs "$NUM_RUNS" > /tmp/cgmt_output.txt 2>&1
-echo "    ✓ CGMT completado"
-
-# ─── 5. SMT ──────────────────────────────────────────────────────────────────
-echo ""
-echo "[5/7] Ejecutando $NUM_RUNS mediciones SMT..."
-timeout "$TIMEOUT_SMT" ./build/raytracer --model smt --runs "$NUM_RUNS" > /tmp/smt_output.txt 2>&1
-echo "    ✓ SMT completado"
-
-# ─── 6. Validación de correctness ────────────────────────────────────────────
-echo ""
-echo "[5/7] Validando correctness (diff de imágenes)..."
+CSV_SEQ="$RESULTS_DIR/mediciones_secuencial.csv"
+CSV_FGMT="$RESULTS_DIR/mediciones_fgmt.csv"
+CSV_CGMT="$RESULTS_DIR/mediciones_cgmt.csv"
+CSV_SMT="$RESULTS_DIR/mediciones_smt.csv"
 
 IMG_SEQ="$RESULTS_DIR/image/frame_secuencial.ppm"
 IMG_FGMT="$RESULTS_DIR/image/frame_fgmt.ppm"
 IMG_CGMT="$RESULTS_DIR/image/frame_cgmt.ppm"
 IMG_SMT="$RESULTS_DIR/image/frame_smt.ppm"
 
-ALL_OK=true
+cd "$PROJECT_ROOT"
 
-for IMG in "$IMG_FGMT" "$IMG_CGMT" "$IMG_SMT"; do
-    MODEL_NAME=$(basename "$IMG" .ppm | sed 's/frame_//')
-    if diff -q "$IMG_SEQ" "$IMG" > /dev/null 2>&1; then
-        echo "    ✓ $MODEL_NAME == sequential (byte-exact)"
+echo ""
+echo "╔══════════════════════════════════════════════════════════════════╗"
+echo "║  MEDICIONES COMPARATIVAS: SEQUENTIAL · FGMT · CGMT · SMT        ║"
+echo "║  Animación 200 frames · Órbita elíptica · 160×120 px            ║"
+echo "╚══════════════════════════════════════════════════════════════════╝"
+[ "$SKIP_FGMT" = true ] && echo "  ⚠ FGMT omitido (--skip-fgmt)"
+[ "$SKIP_SMT"  = true ] && echo "  ⚠ SMT  omitido (--skip-smt)"
+echo ""
+
+# ── Helper: verificar que el CSV tiene N frames ───────────────────────────────
+check_csv() {
+    local csv="$1" label="$2"
+    local lines frames
+    lines=$(wc -l < "$csv" 2>/dev/null || echo 0)
+    frames=$(( lines - 1 ))
+    if [ "$frames" -ge "$EXPECTED_FRAMES" ]; then
+        echo "    ✓ $label: $frames frames en CSV"
     else
-        echo "    ✗ $MODEL_NAME difiere de sequential"
+        echo "    ✗ $label: $frames frames (se esperaban $EXPECTED_FRAMES)"
+        exit 1
+    fi
+}
+
+# ── 1. Compilar ───────────────────────────────────────────────────────────────
+echo "[1/6] Compilando proyecto (incremental)..."
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release > /dev/null 2>&1
+cmake --build build/ -- -j4 2>&1 | grep -E "^(\[|error:|warning:)" || true
+echo "    ✓ Ejecutable listo"
+
+# ── 2. Sequential ─────────────────────────────────────────────────────────────
+echo ""
+echo "[2/6] Ejecutando Sequential (200 frames)..."
+timeout 60 ./build/raytracer --model sequential > /tmp/seq_out.txt 2>&1 || {
+    echo "    ✗ Sequential falló o tardó más de 60s"; tail -10 /tmp/seq_out.txt; exit 1
+}
+check_csv "$CSV_SEQ" "Sequential"
+
+# ── 3. FGMT ───────────────────────────────────────────────────────────────────
+echo ""
+if [ "$SKIP_FGMT" = false ]; then
+    echo "[3/6] Ejecutando FGMT (200 frames · ~102s con semáforos)..."
+    timeout 360 ./build/raytracer --model fgmt > /tmp/fgmt_out.txt 2>&1 || {
+        echo "    ✗ FGMT falló o tardó más de 360s"; tail -10 /tmp/fgmt_out.txt; exit 1
+    }
+    check_csv "$CSV_FGMT" "FGMT"
+else
+    echo "[3/6] FGMT omitido."
+fi
+
+# ── 4. CGMT ───────────────────────────────────────────────────────────────────
+echo ""
+echo "[4/6] Ejecutando CGMT (200 frames)..."
+timeout 120 ./build/raytracer --model cgmt > /tmp/cgmt_out.txt 2>&1 || {
+    echo "    ✗ CGMT falló o tardó más de 120s"; tail -10 /tmp/cgmt_out.txt; exit 1
+}
+check_csv "$CSV_CGMT" "CGMT"
+
+# ── 5. SMT ────────────────────────────────────────────────────────────────────
+echo ""
+if [ "$SKIP_SMT" = false ]; then
+    echo "[5/6] Ejecutando SMT (200 frames)..."
+    timeout 600 ./build/raytracer --model smt > /tmp/smt_out.txt 2>&1 || {
+        echo "    ✗ SMT falló o tardó más de 600s"; tail -10 /tmp/smt_out.txt; exit 1
+    }
+    check_csv "$CSV_SMT" "SMT"
+else
+    echo "[5/6] SMT omitido."
+fi
+
+# ── 6. Validación de correctness ─────────────────────────────────────────────
+echo ""
+echo "[6/6] Validando correctness e imágenes..."
+
+ALL_OK=true
+for pair in "fgmt:$IMG_FGMT" "cgmt:$IMG_CGMT"; do
+    label="${pair%%:*}"
+    img="${pair##*:}"
+    if [ ! -f "$img" ]; then continue; fi
+    if diff -q "$IMG_SEQ" "$img" > /dev/null 2>&1; then
+        echo "    ✓ $label == sequential (byte-exact)"
+    else
+        echo "    ✗ $label difiere de sequential"
         ALL_OK=false
     fi
 done
 
-if [ "$ALL_OK" = false ]; then
-    echo ""
-    echo "    ADVERTENCIA: Hay diferencias en las imágenes generadas."
-    echo "    Los speed ups pueden no ser comparables."
+# SMT puede diferir si su VT no coincide exactamente — reportar sin fallar
+if [ "$SKIP_SMT" = false ] && [ -f "$IMG_SMT" ]; then
+    if diff -q "$IMG_SEQ" "$IMG_SMT" > /dev/null 2>&1; then
+        echo "    ✓ smt == sequential (byte-exact)"
+    else
+        echo "    ⚠ smt difiere de sequential (revisar scheduler SMT)"
+    fi
 fi
 
-# ─── 7. Análisis de speed up y gráficas ──────────────────────────────────────
-echo ""
-echo "[7/7] Generando análisis de speed up y gráficas..."
+[ "$ALL_OK" = false ] && echo "    ⚠ Hay diferencias — revisar lógica de rendering"
 
+# ── Análisis de speedup y gráficas ───────────────────────────────────────────
+echo ""
+echo "Generando reporte de speedup y gráficas..."
 mkdir -p "$GRAPHS_DIR"
 
-if command -v python3 &> /dev/null; then
-    python3 "$PROJECT_ROOT/scripts/analizar_speedup.py" \
-        "$RESULTS_DIR/mediciones_secuencial.csv" \
-        "$RESULTS_DIR/mediciones_fgmt.csv" \
-        "$RESULTS_DIR/mediciones_cgmt.csv" \
-        "$RESULTS_DIR/mediciones_smt.csv" \
-        --graphs "$GRAPHS_DIR" \
-        --log "$LOG_FILE"
-    echo "    ✓ Análisis guardado en: $LOG_FILE"
-    echo "    ✓ Gráficas guardadas en: $GRAPHS_DIR"
-else
-    echo "    ⚠ Python3 no disponible. Omitiendo análisis y gráficas."
-fi
+# Construir lista de CSVs que existen
+CSV_ARGS=()
+for csv in "$CSV_SEQ" "$CSV_FGMT" "$CSV_CGMT" "$CSV_SMT"; do
+    [ -f "$csv" ] && CSV_ARGS+=("$csv")
+done
 
-# ─── Resumen final ────────────────────────────────────────────────────────────
+python3 "$SCRIPTS_DIR/analizar_speedup.py" \
+    "${CSV_ARGS[@]}" \
+    --graphs "$GRAPHS_DIR" \
+    --log "$LOG_FILE"
+
+echo "    ✓ Reporte: $LOG_FILE"
+echo "    ✓ Gráficas: $GRAPHS_DIR/"
+
+# ── Resumen ───────────────────────────────────────────────────────────────────
 echo ""
 echo "╔══════════════════════════════════════════════════════════════════╗"
 echo "║  ✓ MEDICIONES COMPLETADAS                                       ║"
 echo "╚══════════════════════════════════════════════════════════════════╝"
 echo ""
-echo "Resultados en: $RESULTS_DIR"
+echo "  CSVs        : $RESULTS_DIR/mediciones_*.csv"
+echo "  Gráficas    : $GRAPHS_DIR/"
+echo "  Log speedup : $LOG_FILE"
+echo ""
 echo "  ├─ mediciones_secuencial.csv"
 echo "  ├─ mediciones_fgmt.csv"
 echo "  ├─ mediciones_cgmt.csv"
