@@ -20,11 +20,14 @@ private:
     std::uniform_real_distribution<double> dist;
 
 public:
-    // Constructor: inicializar con tamaño de cache
+    // Constructor: inicializar con tamaño de cache y semilla opcional.
     // Cache típico L1: 32-64 KB. Ajustar según modelo deseado.
-    CacheModel(int cache_size = 32768) 
+    // Semilla fija (42) por defecto → resultados deterministas y reproducibles:
+    // misma escena + misma cámara = mismo patrón de cache misses en cada ejecución.
+    // Para threads distintos pasar seed = BASE_SEED + thread_id.
+    CacheModel(int cache_size = 32768, uint32_t seed = 42u)
         : cache_size(cache_size), last_miss_x(0), last_miss_y(0), dist(0.0, 1.0) {
-        rng.seed(std::random_device{}());
+        rng.seed(seed);
     }
 
     // is_cache_miss(): Determinar si hay miss en coordenada (x, y).
