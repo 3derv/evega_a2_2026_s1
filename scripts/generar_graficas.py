@@ -22,20 +22,20 @@ output_dir = os.path.join(os.path.dirname(csv_file), "graficas")
 os.makedirs(output_dir, exist_ok=True)
 
 # Histograma
-plt.figure(figsize=(10, 6))
+plt.figure(figsize=(12, 7))
 plt.hist(data['Tiempo(s)'], bins=20, edgecolor='black')
 plt.title('Distribución de Tiempos de Ejecución (Secuencial)')
 plt.xlabel('Tiempo (s)')
 plt.ylabel('Frecuencia')
-plt.savefig(os.path.join(output_dir, 'histograma_secuencial.png'))
+plt.savefig(os.path.join(output_dir, 'histograma_secuencial.png'), dpi=300, bbox_inches='tight')
 plt.close()
 
 # Boxplot
-plt.figure(figsize=(8, 6))
+plt.figure(figsize=(10, 7))
 plt.boxplot(data['Tiempo(s)'])
 plt.title('Boxplot de Tiempos de Ejecución (Secuencial)')
 plt.ylabel('Tiempo (s)')
-plt.savefig(os.path.join(output_dir, 'boxplot_secuencial.png'))
+plt.savefig(os.path.join(output_dir, 'boxplot_secuencial.png'), dpi=300, bbox_inches='tight')
 plt.close()
 
 print(f"Gráficas generadas en {output_dir}")
