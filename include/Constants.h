@@ -131,6 +131,17 @@ inline const int SMT_NUM_THREADS = 4;
 // Speedup esperado por Amdahl (fracción paralela ≈ 1): ~W = 2×.
 inline const int SMT_ISSUE_WIDTH = 2;
 
+// ============================================================================
+// PARÁMETROS DE CMP (Chip Multiprocessing)
+// ============================================================================
+
+// Número de núcleos físicos independientes.
+// Cada núcleo ejecuta su tile en paralelo real (OS thread → core físico).
+// VT(CMP) = max(VT por núcleo): los núcleos no comparten pipeline.
+// Cada núcleo paga su propio CACHE_MISS_PENALTY_NS (stall sin ocultamiento).
+// Speedup teórico (Amdahl, fracción paralela ≈ 1): ~CMP_NUM_CORES = 4×.
+inline const int CMP_NUM_CORES = 4;
+
 } // namespace constants
 
 #endif // CONSTANTS_H
