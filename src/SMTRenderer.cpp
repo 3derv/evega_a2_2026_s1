@@ -20,59 +20,50 @@ SMTRenderer::SMTRenderer()
         tasks_[i].end   = (i == SMT_NUM_THREADS - 1) ? total : (i + 1) * per_thread;
     }
 
-    cache_models_.resize(SMT_NUM_THREADS, CacheModel(CACHE_SIZE));
+    // Semilla determinista por thread (ver CacheModel.h)
+    cache_models_.resize(SMT_NUM_THREADS);
+    for (int i = 0; i < SMT_NUM_THREADS; ++i)
+        cache_models_[i] = CacheModel(CACHE_SIZE, 42u + static_cast<uint32_t>(i));
 
     thread_stats_.resize(SMT_NUM_THREADS);
     for (int i = 0; i < SMT_NUM_THREADS; ++i)
         thread_stats_[i].thread_id = i;
 
-    dispatch_flags_.resize(SMT_NUM_THREADS, false);
     stall_ns_.resize(SMT_NUM_THREADS, 0LL);
     thread_finished_.resize(SMT_NUM_THREADS, false);
     log_stage_.resize(SMT_NUM_THREADS, 0);
     log_pixel_.resize(SMT_NUM_THREADS, 0);
     for (int i = 0; i < SMT_NUM_THREADS; ++i)
         log_pixel_[i] = tasks_[i].start;
+    // Semáforos inicializados en render_frame() (reinicio por frame)
 }
 
 // render_worker: ciclo de vida del contexto hardware SMT para el thread tid.
 //
 // Modela el "PC + archivo de registros" de un contexto SMT:
-//   - pixel_idx / stage = contador de programa (qué instrucción ejecutar a continuación)
+//   - pixel_idx / stage = contador de programa
 //   - t_hit / hit_sphere = estado de registros del cómputo en vuelo
 //
-// Por cada despacho del coordinador, ejecuta UNA etapa del pipeline:
-//   RAY_GEN     → inicializa registros; nunca stalla
-//   INTERSECT_k → accede a datos de esfera k (puede causar cache miss → stall)
-//   SHADE       → escribe pixel al framebuffer; nunca stalla; avanza pixel_idx
-//
-// En stall: se informa a través de stall_ns_[tid] = CACHE_MISS_PENALTY_NS.
-//           El coordinador decrementa stall_ns_ cada ciclo hasta que llega a 0.
-//           Mientras stall_ns_[tid] > 0, el coordinador NO despacha este thread,
-//           asignando su slot a otro thread con trabajo real (ventaja SMT).
-//           El stall NO acumula VT en este thread (el slot lo "usa" otro thread).
-//
-// En compute: acumula STAGE_QUANTUM_NS en virtual_time_ns (trabajo productivo).
+// Sincronización con semáforos (sin mutex en el camino crítico):
+//   - sem_wait(&worker_sem_[tid]): duerme hasta ser seleccionado por el
+//     coordinador. Solo los ≤ W threads despachados se despiertan por ciclo.
+//   - Escribe stall_ns_[tid], thread_stats_, log_* (datos per-tid, sin race).
+//   - sem_post(&done_sem_): señala al coordinador que terminó esta etapa.
+//     La barrera del semáforo garantiza visibilidad de las escrituras anteriores.
 void SMTRenderer::render_worker(int tid) {
-    int    pixel_idx = tasks_[tid].start;
-    int    pixel_end = tasks_[tid].end;
-    int    stage     = 0;
-    double t_hit     = std::numeric_limits<double>::infinity();
+    int    pixel_idx  = tasks_[tid].start;
+    int    pixel_end  = tasks_[tid].end;
+    int    stage      = 0;
+    double t_hit      = std::numeric_limits<double>::infinity();
     int    hit_sphere = -1;
 
     while (true) {
         // ── ESPERA DESPACHO ────────────────────────────────────────────────
-        // Bloquearse hasta que el coordinador asigne este slot de issue.
-        // Espejo del fetch/dispatch del hardware SMT: el thread espera en la
-        // cola de instrucciones hasta que la unidad de issue lo selecciona.
-        {
-            std::unique_lock<std::mutex> ul(dispatch_mutex_);
-            dispatch_cv_.wait(ul, [&] {
-                return dispatch_flags_[tid] || coordinator_done_;
-            });
-            if (coordinator_done_) break;
-            dispatch_flags_[tid] = false;
-        }
+        // El coordinador hace sem_post(&worker_sem_[tid]) solo cuando selecciona
+        // este thread como uno de los W slots del ciclo. Los demás threads
+        // permanecen bloqueados sin ser despertados (0 spurious wakeups).
+        sem_wait(&worker_sem_[tid]);
+        if (coordinator_done_.load(std::memory_order_acquire)) break;
 
         // ── EJECUTAR ETAPA (sin lock — datos locales al thread) ────────────
         int x = pixel_idx % IMAGE_WIDTH;
@@ -123,30 +114,21 @@ void SMTRenderer::render_worker(int tid) {
             break;
         }
 
-        // ── REPORTAR AL COORDINADOR ────────────────────────────────────────
-        {
-            std::lock_guard<std::mutex> lg(dispatch_mutex_);
-
-            if (stalled) {
-                // Stall: programar penalización. El coordinador decrementará
-                // stall_ns_ cada ciclo hasta llegar a 0 (CACHE_MISS_PENALTY_NS/STAGE_QUANTUM_NS
-                // = 16 ciclos de espera). Durante ese tiempo otro thread llena el slot.
-                stall_ns_[tid] = CACHE_MISS_PENALTY_NS;
-            } else {
-                // Productivo: acumular STAGE_QUANTUM_NS al VT de este thread.
-                // Solo el trabajo real cuenta; los ciclos en stall no penalizan VT
-                // porque son ocultados por el trabajo de otro thread.
-                thread_stats_[tid].virtual_time_ns += STAGE_QUANTUM_NS;
-            }
-            // Actualizar estado de logging para que el coordinador lo muestre
-            log_stage_[tid] = stage;
-            log_pixel_[tid] = pixel_idx;
-            if (pixel_idx >= pixel_end)
-                thread_finished_[tid] = true;
-
-            slots_completed_++;
+        // ── REPORTAR AL COORDINADOR (sin lock) ────────────────────────────
+        // Solo este thread escribe sus campos per-tid → no hay race condition.
+        // sem_post(&done_sem_) actúa como barrera de release: garantiza que
+        // el coordinador vea estas escrituras al volver de sem_wait(&done_sem_).
+        if (stalled) {
+            stall_ns_[tid] = CACHE_MISS_PENALTY_NS;
+        } else {
+            thread_stats_[tid].virtual_time_ns += STAGE_QUANTUM_NS;
         }
-        dispatch_cv_.notify_all();
+        log_stage_[tid] = stage;
+        log_pixel_[tid] = pixel_idx;
+        if (pixel_idx >= pixel_end)
+            thread_finished_[tid] = true;
+
+        sem_post(&done_sem_);   // avisar al coordinador: etapa completada
 
         if (pixel_idx >= pixel_end) break;
     }
@@ -166,16 +148,20 @@ std::vector<Vector3> SMTRenderer::render_frame() {
     // Reiniciar cache models, estadísticas y estado del dispatcher
     reset_thread_stats(thread_stats_, cache_models_);
     for (int i = 0; i < SMT_NUM_THREADS; ++i) {
-        dispatch_flags_[i]   = false;
-        stall_ns_[i]         = 0LL;
-        thread_finished_[i]  = false;
-        log_stage_[i]        = 0;
-        log_pixel_[i]        = tasks_[i].start;
+        stall_ns_[i]        = 0LL;
+        thread_finished_[i] = false;
+        log_stage_[i]       = 0;
+        log_pixel_[i]       = tasks_[i].start;
     }
-    slots_to_complete_ = 0;
-    slots_completed_   = 0;
-    coordinator_done_  = false;
-    global_clock_      = 0;
+    coordinator_done_.store(false, std::memory_order_relaxed);
+    global_clock_ = 0;
+
+    // Inicializar semáforos:
+    //   worker_sem_[i] = 0 → cada thread arranca bloqueado esperando despacho
+    //   done_sem_      = 0 → coordinador bloqueará hasta que workers reporten
+    for (int i = 0; i < SMT_NUM_THREADS; ++i)
+        sem_init(&worker_sem_[i], /*pshared=*/0, /*value=*/0);
+    sem_init(&done_sem_, /*pshared=*/0, /*value=*/0);
 
     // Iniciar N threads (contextos hardware)
     std::vector<std::thread> workers;
@@ -192,88 +178,80 @@ std::vector<Vector3> SMTRenderer::render_frame() {
     // ── CICLO DE HARDWARE ──────────────────────────────────────────────────
     // Cada iteración = 1 ciclo de reloj simulado.
     // El coordinador es el "control unit" que gestiona el issue de instrucciones.
-    int last_dispatched = SMT_NUM_THREADS - 1;  // Posición inicial del round-robin
+    int last_dispatched = SMT_NUM_THREADS - 1;
 
     while (true) {
-        // Verificar si todos los threads completaron sus tiles
-        {
-            std::lock_guard<std::mutex> lg(dispatch_mutex_);
-
-            int n_done = 0;
-            for (bool f : thread_finished_) if (f) ++n_done;
-            if (n_done == SMT_NUM_THREADS) {
-                coordinator_done_ = true;
-                break;  // salir antes de notify para evitar double-notify
-            }
-
-            // Seleccionar hasta W threads listos: round-robin desde last_dispatched.
-            // "Listo" = no stallado y tile no completado.
-            // Esto modela la lógica de selección de instrucciones del SMT issue unit.
-            int n_dispatched = 0;
-            int scan = (last_dispatched + 1) % SMT_NUM_THREADS;
-            for (int i = 0; i < SMT_NUM_THREADS && n_dispatched < SMT_ISSUE_WIDTH; ++i) {
-                int tid = (scan + i) % SMT_NUM_THREADS;
-                if (!thread_finished_[tid] && stall_ns_[tid] <= 0) {
-                    dispatch_flags_[tid] = true;
-                    last_dispatched = tid;
-                    ++n_dispatched;
-                }
-            }
-
-            slots_to_complete_ = n_dispatched;
-            slots_completed_   = 0;
+        // ── VERIFICAR TERMINACIÓN ─────────────────────────────────────────
+        // Todos los sem_wait(&done_sem_) del ciclo anterior ya completaron,
+        // por lo que las escrituras a thread_finished_[] son visibles aquí.
+        int n_done = 0;
+        for (bool f : thread_finished_) if (f) ++n_done;
+        if (n_done == SMT_NUM_THREADS) {
+            // Broadcast: despertar todos los workers bloqueados en worker_sem_
+            coordinator_done_.store(true, std::memory_order_release);
+            for (int i = 0; i < SMT_NUM_THREADS; ++i)
+                sem_post(&worker_sem_[i]);
+            break;
         }
-        dispatch_cv_.notify_all();
 
-        // Esperar que todos los threads despachados completen su etapa.
-        // Si slots_to_complete_ == 0 (todos en stall), la condición es verdadera
-        // inmediatamente → el ciclo avanza sin bloqueo (drain stalls).
-        {
-            std::unique_lock<std::mutex> ul(dispatch_mutex_);
-            dispatch_cv_.wait(ul, [&] {
-                return slots_completed_ >= slots_to_complete_;
-            });
+        // ── DESPACHAR ≤ W THREADS LISTOS ─────────────────────────────────
+        // "Listo" = tile no terminado y sin stall pendiente.
+        // sem_post punto a punto: solo los threads seleccionados se despiertan.
+        int n_dispatched = 0;
+        int scan = (last_dispatched + 1) % SMT_NUM_THREADS;
+        for (int i = 0; i < SMT_NUM_THREADS && n_dispatched < SMT_ISSUE_WIDTH; ++i) {
+            int tid = (scan + i) % SMT_NUM_THREADS;
+            if (!thread_finished_[tid] && stall_ns_[tid] <= 0) {
+                sem_post(&worker_sem_[tid]);  // 1 syscall, 0 spurious wakeups
+                last_dispatched = tid;
+                ++n_dispatched;
+            }
+        }
 
-            // Decrementar stall counters de todos los threads vivos.
-            // Ocurre DESPUÉS de que los threads despachados completan su etapa,
-            // garantizando que el contador refleja el número correcto de ciclos pasados.
+        // ── ESPERAR COMPLETIONS ───────────────────────────────────────────
+        // done_sem_ es un semáforo contador: cada worker hace sem_post al
+        // terminar su etapa. Esperamos exactamente n_dispatched veces.
+        // Si n_dispatched==0 (todos en stall) no bloqueamos → drain stalls.
+        for (int i = 0; i < n_dispatched; ++i)
+            sem_wait(&done_sem_);
+
+        // Después de los sem_wait, todas las escrituras de los workers
+        // despachados (stall_ns_, thread_finished_, log_*) son visibles.
+        for (int i = 0; i < SMT_NUM_THREADS; ++i) {
+            if (!thread_finished_[i] && stall_ns_[i] > 0)
+                stall_ns_[i] = std::max(0LL, stall_ns_[i] - STAGE_QUANTUM_NS);
+        }
+
+        // ── LOGGING VERBOSE ───────────────────────────────────────────────
+        if (verbose_cycles_ > 0 && global_clock_ < verbose_cycles_) {
+            std::cout << "[Ciclo " << std::setw(4) << global_clock_ << "] ";
             for (int i = 0; i < SMT_NUM_THREADS; ++i) {
-                if (!thread_finished_[i] && stall_ns_[i] > 0)
-                    stall_ns_[i] = std::max(0LL, stall_ns_[i] - STAGE_QUANTUM_NS);
-            }
-
-            // ── LOGGING VERBOSE ─────────────────────────────────────────────
-            // Se imprime TRAS el ciclo (etapa ya ejecutada, stalls ya decrementados).
-            // Formato: [Ciclo N] T0:ETAPA(p=X,stall=Xns) T1:STALL(Xns) T2:DONE
-            if (verbose_cycles_ > 0 && global_clock_ < verbose_cycles_) {
-                std::cout << "[Ciclo " << std::setw(4) << global_clock_ << "] ";
-                for (int i = 0; i < SMT_NUM_THREADS; ++i) {
-                    std::cout << "T" << i << ":";
-                    if (thread_finished_[i]) {
-                        std::cout << "DONE";
-                    } else if (stall_ns_[i] > 0) {
-                        // El counter ya fue decrementado; el stall_ns_ es el restante
-                        std::cout << "STALL(" << stall_ns_[i] << "ns)";
-                    } else {
-                        int px = log_pixel_[i];
-                        int st = log_stage_[i];
-                        std::cout << STAGE_NAMES[st]
-                                  << "(p=" << px
-                                  << ",x=" << (px % IMAGE_WIDTH)
-                                  << ",y=" << (px / IMAGE_WIDTH) << ")";
-                    }
-                    if (i < SMT_NUM_THREADS - 1) std::cout << "  ";
+                std::cout << "T" << i << ":";
+                if (thread_finished_[i]) {
+                    std::cout << "DONE";
+                } else if (stall_ns_[i] > 0) {
+                    std::cout << "STALL(" << stall_ns_[i] << "ns)";
+                } else {
+                    int px = log_pixel_[i];
+                    int st = log_stage_[i];
+                    std::cout << STAGE_NAMES[st]
+                              << "(p=" << px
+                              << ",x=" << (px % IMAGE_WIDTH)
+                              << ",y=" << (px / IMAGE_WIDTH) << ")";
                 }
-                std::cout << "\n";
+                if (i < SMT_NUM_THREADS - 1) std::cout << "  ";
             }
-
-            global_clock_++;
+            std::cout << "\n";
         }
+
+        global_clock_++;
     }
 
-    // Despertar workers bloqueados en la espera de despacho (coordinator_done_ = true)
-    dispatch_cv_.notify_all();
     for (auto& t : workers) t.join();
+
+    for (int i = 0; i < SMT_NUM_THREADS; ++i)
+        sem_destroy(&worker_sem_[i]);
+    sem_destroy(&done_sem_);
 
     // VT total = suma de threads (pipeline compartido; stalls hidden por otros threads)
     virtual_time_ns_ = sum_virtual_times(thread_stats_);

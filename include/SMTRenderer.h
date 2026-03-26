@@ -6,10 +6,11 @@
 #include "CacheModel.h"
 #include "Metrics.h"
 #include "Ray.h"
+#include "Constants.h"
 #include <vector>
 #include <thread>
-#include <mutex>
-#include <condition_variable>
+#include <atomic>
+#include <semaphore.h>
 
 // SMTRenderer: Renderizador SMT (Simultaneous Multithreading).
 //
@@ -37,9 +38,12 @@
 //
 // Scheduler (coordinador en render_frame):
 //   Por ciclo: seleccionar hasta W threads listos (stall_ns ≤ 0, !finished)
-//   en round-robin desde el último despachado. Señalar esos W threads via
-//   condition_variable, esperar su completion, decrementar stall_ns de todos
-//   los vivos, global_clock_++.
+//   en round-robin desde el último despachado.
+//   Señalización punto a punto con semáforos:
+//     - sem_post(&worker_sem_[tid]) por cada thread despachado (máx W=2)
+//     - sem_wait(&done_sem_) × n_dispatched para esperar completions
+//   Elimina los spurious wakeups de notify_all(): solo los threads
+//   seleccionados se despiertan; los demás duermen sin ser tocados.
 class SMTRenderer : public IRenderer {
 public:
     SMTRenderer();
@@ -81,19 +85,25 @@ private:
     long long virtual_time_ns_ = 0LL;
     int       global_clock_    = 0;
 
-    // ── Estado del dispatcher SMT ─────────────────────────────────────────
-    // Protegido por dispatch_mutex_. El coordinador (render_frame) escribe
-    // dispatch_flags_ y stall_ns_; los workers los leen y actualizan.
-    std::mutex              dispatch_mutex_;
-    std::condition_variable dispatch_cv_;
+    // ── Estado del dispatcher SMT (semáforos) ──────────────────────────────
+    //
+    // worker_sem_[i]: el coordinador hace sem_post para despachar thread i.
+    //   Thread i bloquea en sem_wait hasta recibir su asignación de issue.
+    //   Solo los threads seleccionados (≤ W=2) se despiertan por ciclo.
+    //
+    // done_sem_: semáforo contador. Cada worker hace sem_post al terminar
+    //   su etapa. El coordinador hace sem_wait × n_dispatched para esperar
+    //   exactamente las completions del ciclo actual (sin falsos despertares).
+    //
+    // stall_ns_[i] y thread_finished_[i]: escritos por worker i ANTES de
+    //   sem_post(&done_sem_), leídos por coordinador DESPUÉS de sem_wait.
+    //   La barrera del semáforo garantiza visibilidad sin mutex adicional.
+    sem_t worker_sem_[constants::SMT_NUM_THREADS]; // coordinador → worker
+    sem_t done_sem_;                                // worker → coordinador
 
-    std::vector<bool>       dispatch_flags_;   // true = este thread fue asignado este ciclo
-    std::vector<long long>  stall_ns_;         // stall restante por thread (ns)
-    std::vector<bool>       thread_finished_;  // tile completado por thread
-
-    int  slots_to_complete_ = 0;  // threads despachados en el ciclo actual
-    int  slots_completed_   = 0;  // threads que terminaron su etapa este ciclo
-    bool coordinator_done_  = false; // señal de fin del coordinador a los workers
+    std::vector<long long>       stall_ns_;         // stall restante por thread (ns)
+    std::vector<bool>            thread_finished_;  // tile completado por thread
+    std::atomic<bool>            coordinator_done_{false}; // señal de fin a workers
 
     // ── Logging verbose ───────────────────────────────────────────────────
     // Actualizado por cada worker bajo dispatch_mutex_ al terminar su etapa.
