@@ -20,10 +20,10 @@
 //
 // Mecanismo (idéntico al código de referencia en C):
 //   - current_thread_ indica qué thread tiene el pipeline.
-//   - En STALL: se paga el ciclo de stall + penalización de context switch
-//               si realmente se cede a otro thread.
-//        → stats: +PIXEL_QUANTUM_NS + CONTEXT_SWITCH_COST_NS
-//        → el pixel NO avanza; se reintentará el próximo turno.
+//   - En STALL: el thread CEDE el slot INMEDIATAMENTE al siguiente ready.
+//        → stats: 0 ns de VT (stall completamente oculto).
+//        → el pixel NO avanza; se reintentará cuando recupere el slot.
+//        → el otro thread usa el slot → ningún ciclo desperdiciado.
 //   - En COMPUTE: se renderiza el pixel, se avanza, sin cambio de contexto.
 //        → stats: +PIXEL_QUANTUM_NS
 //   - Al terminar el tile: switch_to_next_thread() sin coste extra.

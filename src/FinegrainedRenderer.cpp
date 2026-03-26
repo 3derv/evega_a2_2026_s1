@@ -19,8 +19,11 @@ FinegrainedRenderer::FinegrainedRenderer()
     tiles[3] = {tile_width, IMAGE_WIDTH, tile_height, IMAGE_HEIGHT, 3};
 
     cache_models.resize(NUM_THREADS);
+    // Semilla determinista por thread: misma escena → mismo patrón de misses
+    // en cada ejecución (reproducibilidad). Se diferencia por thread_id para
+    // evitar que todos los tiles compartan el mismo estado inicial del RNG.
     for (int i = 0; i < NUM_THREADS; ++i)
-        cache_models[i] = CacheModel(CACHE_SIZE);
+        cache_models[i] = CacheModel(CACHE_SIZE, 42u + static_cast<uint32_t>(i));
 
     thread_stats.resize(NUM_THREADS);
     for (int i = 0; i < NUM_THREADS; ++i)
@@ -53,9 +56,13 @@ void FinegrainedRenderer::render_tile_worker(int thread_id) {
 
         // Ciclo de pipeline: este thread tiene píxeles pendientes
         if (cache.is_cache_miss(x, y)) {
-            // NOP/STALL: slot consumido, pixel se reintenta la próxima vez
-            stats.virtual_time_ns += NOP_PENALTY_NS;
-            stats.nops_count++;
+            // STALL: el slot se ocupa con un NOP de duración PIXEL_QUANTUM_NS.
+            // El slot fue gastado pero no produjo un píxel → el quantum completo
+            // se desperdicia. El píxel se reintentará en el próximo turno.
+            // Costo = PIXEL_QUANTUM_NS (igual que un compute, pero sin avanzar).
+            // Comparar con CGMT: allí el stall cuesta 0 porque el slot es cedido
+            // de inmediato a otro thread que sí hace trabajo.
+            stats.virtual_time_ns += PIXEL_QUANTUM_NS;
             stats.cache_misses++;
         } else {
             // COMPUTE: renderizar pixel y avanzar al siguiente

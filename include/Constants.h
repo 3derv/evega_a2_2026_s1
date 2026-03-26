@@ -81,10 +81,15 @@ inline const std::string CSV_FILE_CMP          = "results/mediciones_cmp.csv";
 inline const int NUM_THREADS = 4;
 
 // Tamaño de cache a simular (bytes)
-// 32 KB = típico L1 cache en CPUs modernas
-// Inversamente proporcional a probabilidad de miss: miss_prob = 64 bytes / CACHE_SIZE
-// Menor cache => más misses => más NOPs => más tiempo de ejecución
-inline const int CACHE_SIZE = 32768;
+// La probabilidad base de miss = 64 bytes / CACHE_SIZE (un cache line por píxel).
+// Con CACHE_SIZE = 256 → miss_rate ≈ 25% → ~1200 stalls/frame (4800 px)
+// Esto produce diferencias de VT visibles entre modelos:
+//   Sequential: paga 3200 ns×stall (sin ocultar) → VT ~8.6 ms
+//   FGMT:       paga  100 ns×stall (NOP oculto) → speedup ~1.76×
+//   CGMT:       paga 1400 ns×stall (slot + switch) → speedup ~1.33×
+//   SMT:        stalls COMPLETAMENTE ocultos + W=2 → speedup ~3×
+// Con CACHE_SIZE > 4096 el miss rate < 1.6% y las diferencias son < 5%.
+inline const int CACHE_SIZE = 256;
 
 // Penalización de latencia por NOP (nanosegundos)
 // Cada NOP físico cuesta ~100 ns en CPU moderna
@@ -107,12 +112,10 @@ inline const long long PIXEL_QUANTUM_NS       = 1000LL;
 
 // Penalizacion completa de un stall: NOPS_PER_STALL x NOP_PENALTY_NS = 3200 ns
 // Solo Sequential paga este valor integro (ningun otro thread puede ejecutar).
-// FGMT paga solo NOP_PENALTY_NS (100 ns); CGMT paga CONTEXT_SWITCH_COST_NS (400 ns).
+// FGMT paga PIXEL_QUANTUM_NS (el slot se gasta en un NOP, sin avanzar el pixel).
+// CGMT paga 0 ns (cambia de contexto inmediatamente, el slot lo llena otro thread).
+// SMT  paga 0 ns (el slot lo llena otro thread del mismo ciclo de emision).
 inline const long long CACHE_MISS_PENALTY_NS  = static_cast<long long>(NOPS_PER_STALL) * NOP_PENALTY_NS;
-
-// Overhead de cambio de contexto en CGMT: el stall queda oculto pero se paga
-// el costo de guardar/restaurar registros del contexto = 4 ciclos x 100 ns/ciclo
-inline const long long CONTEXT_SWITCH_COST_NS = 400LL;
 
 // ============================================================================
 // PARÁMETROS DE SMT (Simultaneous Multithreading)
@@ -122,20 +125,11 @@ inline const long long CONTEXT_SWITCH_COST_NS = 400LL;
 // Igual a NUM_THREADS para mantener comparabilidad entre modelos
 inline const int SMT_NUM_THREADS = 4;
 
-// Issue width W: cuántos threads puede despachar el pipeline por ciclo.
-// W=2 modela un SMT 2-way: 2 instrucciones de threads distintos por ciclo.
-// En FGMT solo 1 thread avanza por ciclo; SMT puede avanzar hasta 2 → más throughput.
+// Issue width W: cuántos pixels puede despachar el pipeline por ciclo.
+// W=2 modela un SMT 2-way: el scheduler intenta llenar 2 slots por ciclo
+// con threads distintos. En FGMT/CGMT solo 1 slot se llena por ciclo.
+// Speedup esperado por Amdahl (fracción paralela ≈ 1): ~W = 2×.
 inline const int SMT_ISSUE_WIDTH = 2;
-
-// Número de etapas en que se descompone el trazado de un pixel (pipeline SMT):
-//   RAY_GEN, INTERSECT_0, INTERSECT_1, INTERSECT_2, SHADE = 5 etapas
-// Cada etapa representa una "instrucción" que puede stallarse independientemente.
-inline const int SMT_NUM_STAGES = 5;
-
-// Costo de una etapa de pipeline (ns).
-// STAGE_QUANTUM_NS × SMT_NUM_STAGES = PIXEL_QUANTUM_NS = 1000 ns → consistente.
-// Un pixel completo sin stalls cuesta exactamente lo mismo en todos los modelos.
-inline const long long STAGE_QUANTUM_NS = PIXEL_QUANTUM_NS / SMT_NUM_STAGES; // 200 ns
 
 } // namespace constants
 

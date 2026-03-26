@@ -22,8 +22,9 @@ CoarseRenderer::CoarseRenderer()
     }
 
     cache_models.resize(NUM_THREADS);
+    // Semilla determinista por thread (ver CacheModel.h)
     for (int i = 0; i < NUM_THREADS; ++i)
-        cache_models[i] = CacheModel(CACHE_SIZE);
+        cache_models[i] = CacheModel(CACHE_SIZE, 42u + static_cast<uint32_t>(i));
 
     thread_done.resize(NUM_THREADS, false);
 
@@ -81,21 +82,16 @@ void CoarseRenderer::render_worker(int thread_id) {
         int y = pixel_idx / IMAGE_WIDTH;
 
         if (cache.is_cache_miss(x, y)) {
-            // ── STALL ──────────────────────────────────────────────────────
-            // El pipeline detecta el miss: el slot se consume pero el pixel
-            // NO avanza (se reintentará el próximo turno de este contexto).
+            // ── STALL DETECTADO → CAMBIO DE CONTEXTO INMEDIATO ────────────
+            // CGMT prevé el stall y cede el slot al siguiente thread activo
+            // ANTES de desperdiciar ningún ciclo. Otro thread llena el slot
+            // con trabajo real → el stall queda completamente oculto.
+            // Costo para este thread: 0 ns de VT (ningún ciclo desperdiciado).
+            // El thread retomará el control cuando le toque de nuevo y
+            // reintentará el mismo píxel (puede que ya esté en cache).
             stats.cache_misses++;
-            stats.virtual_time_ns += PIXEL_QUANTUM_NS;  // ciclo del stall
-            global_clock_++;
-
-            // Cambio de contexto: cede al siguiente thread activo
-            int prev = current_thread;
             switch_to_next_thread();
-            if (current_thread != prev) {
-                // Penalización real de context switch solo si hubo cambio
-                stats.virtual_time_ns += CONTEXT_SWITCH_COST_NS;
-                global_clock_++;
-            }
+            global_clock_++;
         } else {
             // ── COMPUTE ────────────────────────────────────────────────────
             // Renderizar pixel y avanzar al siguiente de este tile
