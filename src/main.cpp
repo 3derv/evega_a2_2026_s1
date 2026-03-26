@@ -85,8 +85,22 @@ int main(int argc, char* argv[]) {
         }
 
         // Rutas ya definidas en Exporter: no se repite la lógica modelo→archivo
+        // Indicar cuál es la métrica relevante según el modelo.
+        // FGMT/CGMT/Sequential: simulan un CLK virtual → SpeedUp se mide en
+        //   Tiempo Virtual (reloj simulado, reproducible e independiente del OS).
+        // SMT/CMP: paralelismo real → el CPU wall-clock es la métrica de rendimiento.
+        if (model == "fgmt" || model == "cgmt") {
+            std::cout << "\nMétrica principal : Tiempo Virtual (reloj simulado del pipeline)" << std::endl;
+            std::cout << "  CPU time         : sobrecarga de emulación — NO es la métrica de rendimiento" << std::endl;
+        } else if (model == "smt" || model == "cmp") {
+            std::cout << "\nMétrica principal : Tiempo CPU (throughput real del modelo hardware)" << std::endl;
+        } else {
+            std::cout << "\nMétrica principal : Tiempo Virtual (baseline del pipeline secuencial)" << std::endl;
+        }
+
         std::cout << "\nArchivo de mediciones guardado en: " << runner.get_csv_file() << std::endl;
         std::cout << "Imagen guardada en: " << runner.get_image_file() << std::endl;
+        std::cout << "(I/O excluido del timer: los tiempos miden solo render_frame())" << std::endl;
 
         return 0;
     } catch (const std::invalid_argument& e) {
