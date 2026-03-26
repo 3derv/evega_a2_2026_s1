@@ -11,8 +11,8 @@ namespace constants {
 
 // Dimensiones de la imagen renderizada (píxeles)
 // 160x120 = resolución reducida para medir rendimiento por frame con animación
-inline const int IMAGE_WIDTH  = 160;
-inline const int IMAGE_HEIGHT = 120;
+inline const int IMAGE_WIDTH  = 80;
+inline const int IMAGE_HEIGHT = 60;
 
 // ============================================================================
 // PARÁMETROS DE ANIMACIÓN
