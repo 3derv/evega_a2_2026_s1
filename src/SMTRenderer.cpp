@@ -100,7 +100,7 @@ void SMTRenderer::render_worker(int tid) {
                 thread_stats_[tid].cache_misses++;
                 // No avanzar stage: se reintentará cuando stall_ns_ llegue a 0
             } else {
-                Ray    r = make_ray(x, y);
+                Ray    r = make_ray(x, y, camera_pos_);
                 double t = 0.0;
                 if (scene_.spheres[k].intersect(r, t) && t < t_hit) {
                     t_hit      = t;

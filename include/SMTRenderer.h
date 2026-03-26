@@ -5,6 +5,7 @@
 #include "Scene.h"
 #include "CacheModel.h"
 #include "Metrics.h"
+#include "Ray.h"
 #include <vector>
 #include <thread>
 #include <mutex>
@@ -46,6 +47,10 @@ public:
     // Habilitar logging ciclo a ciclo. cycles = número de ciclos a imprimir (0 = off).
     void set_verbose(int cycles) { verbose_cycles_ = cycles; }
 
+    // Actualiza la posición de cámara antes de render_frame().
+    // GenericRunner la llama una vez por frame; el scheduler SMT no cambia.
+    void set_camera_pos(const Vector3& pos) override { camera_pos_ = pos; }
+
     std::vector<Vector3> render_frame() override;
 
     std::string get_model_name() const override { return "smt"; }
@@ -66,7 +71,8 @@ private:
     // Rango de píxeles asignado a cada thread (equivale al "tile" de FGMT/CGMT)
     struct Task { int start, end; };
 
-    Scene scene_;
+    Scene   scene_;
+    Vector3 camera_pos_;   // Posición de cámara para el frame actual (órbita elíptica)
     std::vector<Vector3>              frame_;
     std::vector<CacheModel>           cache_models_;
     std::vector<trace::ThreadMetrics> thread_stats_;
