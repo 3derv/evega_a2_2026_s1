@@ -25,6 +25,17 @@ from datetime import datetime
 SCHED_MODELS = {'sequential', 'fgmt', 'cgmt'}
 PERF_MODELS  = {'smt', 'cmp'}
 
+# Número de hilos / contextos hardware de cada modelo.
+# Usado para calcular Eficiencia Paralela: E = Speedup / N.
+# (FGMT/CGMT: N=4 contextos compartiendo 1 pipeline; SMT: W=2 slots; CMP: N=4 cores)
+THREAD_COUNT = {
+    'sequential': 1,
+    'fgmt':       4,    # 4 contextos hardware (pipeline compartido, VT simulado)
+    'cgmt':       4,    # 4 contextos hardware (pipeline compartido, VT simulado)
+    'smt':        2,    # W=2 issue slots sin OS threads (simulado)
+    'cmp':        4,    # 4 OS threads reales (N = CMP_NUM_CORES)
+}
+
 # ─── helpers ──────────────────────────────────────────────────────────────────
 
 def analyze_csv(csv_path):
@@ -397,6 +408,202 @@ def generate_graphs(stats, graphs_dir):
             plt.savefig(f"{graphs_dir}/06_cpu_speedup_smt_cmp.png", dpi=300)
             plt.close()
 
+    # ── 7. Eficiencia Paralela: E = Speedup / N ───────────────────────────────
+    # FGMT/CGMT: speedup de VT (reloj simulado), N=4 contextos.
+    # SMT: speedup de CPU time, N=2 issue slots.
+    # CMP: speedup de CPU time, N=4 cores reales.
+    # E=1.0 → eficiencia perfecta (speedup = N); E<1.0 → overhead/contención.
+    if 'sequential' in stats:
+        seq_vt_avg = vt_mean_ms(stats['sequential'])
+        seq_cpu_m  = stats['sequential']['mean']
+        eff_data = []
+        for lbl in labels:
+            if lbl == 'sequential':
+                continue
+            n = THREAD_COUNT.get(lbl, 1)
+            if lbl in PERF_MODELS:
+                sp = seq_cpu_m / stats[lbl]['mean'] if stats[lbl]['mean'] > 0 else 0
+            else:
+                vm = vt_mean_ms(stats[lbl])
+                sp = seq_vt_avg / vm if vm > 0 else 0
+            eff_data.append((lbl, n, sp, sp / n if n > 0 else 0))
+        if eff_data:
+            xlabels_e  = [f"{d[0].upper()}\n(N={d[1]})" for d in eff_data]
+            eff_values = [d[3] for d in eff_data]
+            clr_e      = [colors.get(d[0], 'slategray') for d in eff_data]
+            fig, ax = plt.subplots(figsize=(max(7, 3 * len(eff_data)), 6))
+            bars = ax.bar(xlabels_e, eff_values, color=clr_e,
+                          alpha=0.8, edgecolor='black', width=0.4)
+            for bar, (lbl, n, sp, ef) in zip(bars, eff_data):
+                sign = "+" if sp >= 1.0 else ""
+                ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
+                        f'{ef:.3f}\n({ef*100:.1f}%)',
+                        ha='center', va='bottom', fontsize=11, fontweight='bold')
+            ax.axhline(1.0, color='gray', linestyle='--', linewidth=1.8,
+                       label='Eficiencia ideal = 1.0 (100%)')
+            ax.set_ylabel('Eficiencia Paralela  E = Speedup / N', fontweight='bold')
+            ax.set_title('Eficiencia Paralela por Modelo\n'
+                         '(FGMT/CGMT: VT · SMT/CMP: CPU wall-clock)',
+                         fontweight='bold')
+            ax.set_ylim(0, max(max(eff_values, default=1.0), 1.05) * 1.30)
+            ax.grid(True, alpha=0.3, axis='y')
+            ax.legend()
+            plt.tight_layout()
+            plt.savefig(f"{graphs_dir}/07_efficiency.png", dpi=300)
+            plt.close()
+
+    # ── 8. Escalabilidad: N vs Speedup ───────────────────────────────────────
+    # Curva ideal = speedup lineal (S = N).  Puntos reales muestran cuánto se
+    # acerca cada modelo al ideal de Amdahl para fracción paralela ≈ 1.
+    if 'sequential' in stats:
+        seq_vt_avg = vt_mean_ms(stats['sequential'])
+        seq_cpu_m  = stats['sequential']['mean']
+        scale_pts  = [(1, 1.0, 'sequential', colors.get('sequential', 'royalblue'), 'baseline')]
+        for lbl in labels:
+            if lbl == 'sequential':
+                continue
+            n = THREAD_COUNT.get(lbl, 1)
+            if lbl in PERF_MODELS:
+                sp = seq_cpu_m / stats[lbl]['mean'] if stats[lbl]['mean'] > 0 else 0
+                kind = 'real'
+            else:
+                vm = vt_mean_ms(stats[lbl])
+                sp = seq_vt_avg / vm if vm > 0 else 0
+                kind = 'modeled'
+            scale_pts.append((n, sp, lbl, colors.get(lbl, 'slategray'), kind))
+
+        if len(scale_pts) > 1:
+            n_max = max(p[0] for p in scale_pts)
+            n_rng = np.linspace(1, n_max * 1.2, 120)
+            fig, ax = plt.subplots(figsize=(10, 6))
+            ax.plot(n_rng, n_rng, 'k--', linewidth=1.5, alpha=0.4, label='Ideal S = N')
+            for n_pt, sp_pt, lbl_pt, c_pt, kind_pt in scale_pts:
+                marker = 'D' if kind_pt == 'baseline' else (
+                         'o' if kind_pt == 'real' else 's')
+                ax.scatter(n_pt, sp_pt, color=c_pt, s=170, zorder=5, marker=marker)
+                offset = (8, 6) if lbl_pt != 'sequential' else (8, -16)
+                ax.annotate(f'{lbl_pt.upper()}\n{sp_pt:.2f}x',
+                            (n_pt, sp_pt), textcoords='offset points',
+                            xytext=offset, fontsize=9, color=c_pt, fontweight='bold')
+            ax.set_xlabel('Número de Hilos / Contextos (N)', fontweight='bold')
+            ax.set_ylabel('Speedup vs Sequential', fontweight='bold')
+            ax.set_title('Escalabilidad: Speedup en función de N\n'
+                         '(● real CPU  ■ simulado VT  ◆ baseline sequential)',
+                         fontweight='bold')
+            ax.set_xlim(0, n_max * 1.35)
+            y_top = max(p[1] for p in scale_pts)
+            ax.set_ylim(0, max(y_top, float(n_max)) * 1.25)
+            ax.grid(True, alpha=0.3)
+            from matplotlib.lines import Line2D
+            legend_elems = [
+                Line2D([0], [0], marker='o', color='w', markerfacecolor='gray',
+                       markersize=10, label='Real (CPU wall-clock)'),
+                Line2D([0], [0], marker='s', color='w', markerfacecolor='gray',
+                       markersize=10, label='Simulado (Tiempo Virtual)'),
+                Line2D([0], [0], linestyle='--', color='k', alpha=0.4,
+                       label='Speedup ideal = N'),
+            ]
+            ax.legend(handles=legend_elems)
+            plt.tight_layout()
+            plt.savefig(f"{graphs_dir}/08_scalability.png", dpi=300)
+            plt.close()
+
+    # ── 9. Grupo Simulado: Sequential vs FGMT vs CGMT — Tiempo Virtual ────────
+    # Compara SOLO los modelos que simulan un pipeline compartido (misma métrica).
+    # La métrica correcta es el Tiempo Virtual — el CPU time es overhead de emulación.
+    MODELED_GROUP = [l for l in labels if l in ('sequential', 'fgmt', 'cgmt')]
+    if len(MODELED_GROUP) >= 2:
+        m_vt   = [vt_series(stats[l]) for l in MODELED_GROUP]
+        m_avgs = [vt_mean_ms(stats[l]) for l in MODELED_GROUP]
+        m_clrs = [colors.get(l, 'slategray') for l in MODELED_GROUP]
+
+        fig, (ax_bp, ax_sp) = plt.subplots(1, 2, figsize=(14, 6))
+
+        bp = ax_bp.boxplot(m_vt, labels=[l.upper() for l in MODELED_GROUP],
+                           patch_artist=True, widths=0.5)
+        for patch, c in zip(bp['boxes'], m_clrs):
+            patch.set_facecolor(c); patch.set_alpha(0.7)
+        for i, (med_line, lbl) in enumerate(zip(bp['medians'], MODELED_GROUP), start=1):
+            mv = med_line.get_ydata()[0]
+            ax_bp.text(i, mv, f' {mv:.3f}', va='center', fontsize=9, fontweight='bold')
+        ax_bp.set_ylabel('Tiempo Virtual por frame (ms)', fontweight='bold')
+        ax_bp.set_title('Distribución VT — Modelos Simulados\n(pipeline compartido)',
+                        fontweight='bold')
+        ax_bp.grid(True, alpha=0.3, axis='y')
+
+        if 'sequential' in MODELED_GROUP:
+            seq_vt_avg2 = vt_mean_ms(stats['sequential'])
+            sp_vals = [seq_vt_avg2 / a if a > 0 else 0 for a in m_avgs]
+            bars9 = ax_sp.bar([l.upper() for l in MODELED_GROUP], sp_vals,
+                              color=m_clrs, alpha=0.8, edgecolor='black', width=0.45)
+            for bar, sv in zip(bars9, sp_vals):
+                ax_sp.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
+                           f'{sv:.3f}x', ha='center', va='bottom',
+                           fontsize=12, fontweight='bold')
+            ax_sp.axhline(1.0, color='royalblue', linestyle='--', linewidth=2,
+                          label='Sequential = 1×')
+            ax_sp.set_ylabel('Speed Up VT vs Sequential', fontweight='bold')
+            ax_sp.set_title('Speed Up VT — Modelos Simulados\n(FGMT / CGMT vs Sequential)',
+                            fontweight='bold')
+            ax_sp.set_ylim(0, max(sp_vals) * 1.35)
+            ax_sp.grid(True, alpha=0.3, axis='y')
+            ax_sp.legend()
+
+        plt.suptitle('Comparativa Modelos Simulados (Pipeline Compartido)',
+                     fontweight='bold', fontsize=14)
+        plt.tight_layout()
+        plt.savefig(f"{graphs_dir}/09_modeled_group_comparison.png", dpi=300,
+                    bbox_inches='tight')
+        plt.close()
+
+    # ── 10. Grupo Real: Sequential vs SMT vs CMP — CPU wall-clock ────────────
+    # Compara SOLO los modelos con paralelismo real o baseline secuencial.
+    # La métrica correcta es el CPU time (wall-clock sin I/O).
+    REAL_GROUP = [l for l in labels if l in ('sequential', 'smt', 'cmp')]
+    if len(REAL_GROUP) >= 2:
+        r_times = [stats[l]['times'] * 1e3 for l in REAL_GROUP]   # s → ms
+        r_avgs  = [stats[l]['mean']  * 1e3 for l in REAL_GROUP]
+        r_clrs  = [colors.get(l, 'slategray') for l in REAL_GROUP]
+
+        fig, (ax_bp2, ax_sp2) = plt.subplots(1, 2, figsize=(14, 6))
+
+        bp2 = ax_bp2.boxplot(r_times, labels=[l.upper() for l in REAL_GROUP],
+                             patch_artist=True, widths=0.5)
+        for patch, c in zip(bp2['boxes'], r_clrs):
+            patch.set_facecolor(c); patch.set_alpha(0.7)
+        for i, (med_line, lbl) in enumerate(zip(bp2['medians'], REAL_GROUP), start=1):
+            mv = med_line.get_ydata()[0]
+            ax_bp2.text(i, mv, f' {mv:.3f}', va='center', fontsize=9, fontweight='bold')
+        ax_bp2.set_ylabel('Tiempo CPU por frame (ms)', fontweight='bold')
+        ax_bp2.set_title('Distribución CPU — Modelos Reales\n(wall-clock · I/O excluido)',
+                         fontweight='bold')
+        ax_bp2.grid(True, alpha=0.3, axis='y')
+
+        if 'sequential' in REAL_GROUP:
+            seq_cpu_m2 = stats['sequential']['mean'] * 1e3   # ms
+            sp_vals2   = [seq_cpu_m2 / a if a > 0 else 0 for a in r_avgs]
+            bars10 = ax_sp2.bar([l.upper() for l in REAL_GROUP], sp_vals2,
+                                color=r_clrs, alpha=0.8, edgecolor='black', width=0.45)
+            for bar, sv in zip(bars10, sp_vals2):
+                ax_sp2.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
+                            f'{sv:.2f}x', ha='center', va='bottom',
+                            fontsize=12, fontweight='bold')
+            ax_sp2.axhline(1.0, color='royalblue', linestyle='--', linewidth=2,
+                           label='Sequential = 1×')
+            ax_sp2.set_ylabel('Speed Up CPU vs Sequential', fontweight='bold')
+            ax_sp2.set_title('Speed Up CPU — Modelos Reales\n(SMT / CMP vs Sequential)',
+                             fontweight='bold')
+            ax_sp2.set_ylim(0, max(sp_vals2) * 1.35)
+            ax_sp2.grid(True, alpha=0.3, axis='y')
+            ax_sp2.legend()
+
+        plt.suptitle('Comparativa Modelos Reales (Paralelismo Hardware)',
+                     fontweight='bold', fontsize=14)
+        plt.tight_layout()
+        plt.savefig(f"{graphs_dir}/10_real_group_comparison.png", dpi=300,
+                    bbox_inches='tight')
+        plt.close()
+
 
 # ─── main ─────────────────────────────────────────────────────────────────────
 
@@ -548,6 +755,62 @@ def main():
                 cpu_str    = f"({cpu_ratio:.2f}x emulación)"
                 metrica    = "← VT (scheduler)"
             lines.append(f"  {name.upper():<12} {vt_str:<16} {vt_status:<24} {cpu_str:<16} {metrica}")
+        lines.append(SEP2)
+        lines.append("")
+
+    # ── Eficiencia paralela ────────────────────────────────────────────────
+    if 'sequential' in stats:
+        seq_vt_m2  = stats['sequential']['vt_mean']
+        seq_cpu_m2 = stats['sequential']['mean']
+        lines.append(SEP2)
+        lines.append("EFICIENCIA PARALELA  (E = Speedup / N)")
+        lines.append(SEP2)
+        lines.append("  N = número de hilos/contextos del modelo.")
+        lines.append("  FGMT/CGMT → Speedup de VT (reloj simulado).")
+        lines.append("  SMT/CMP   → Speedup de CPU wall-clock.")
+        lines.append(SEP2)
+        hdr_e = f"  {'Modelo':<12} {'N':<5} {'Speedup':<12} {'Eficiencia':<14} {'Tipo'}"
+        lines.append(hdr_e)
+        lines.append(f"  {'-'*12} {'-'*4} {'-'*11} {'-'*13} {'-'*14}")
+        for name, s in stats.items():
+            if name == 'sequential':
+                lines.append(f"  {'SEQUENTIAL':<12} {1:<5} {'1.0000':<12} {'1.0000':<14} baseline")
+                continue
+            n = THREAD_COUNT.get(name, 1)
+            if name in PERF_MODELS:
+                sp  = seq_cpu_m2 / s['mean'] if s['mean'] > 0 else 0
+                tip = "CPU wall-clock"
+            else:
+                vm_ns = s['vt_mean']
+                sp  = (seq_vt_m2 / vm_ns) if (seq_vt_m2 and vm_ns and vm_ns > 0) else 0
+                tip = "Tiempo Virtual"
+            eff = sp / n if n > 0 else 0
+            lines.append(f"  {name.upper():<12} {n:<5} {sp:<12.4f} {eff:<14.4f} {tip}")
+        lines.append(SEP2)
+        lines.append("")
+
+    # ── Escalabilidad ─────────────────────────────────────────────────────
+    if 'sequential' in stats:
+        lines.append(SEP2)
+        lines.append("ESCALABILIDAD  (Speedup real vs Speedup ideal = N)")
+        lines.append(SEP2)
+        lines.append("  S_ideal = N (Amdahl con fracción paralela = 1).")
+        lines.append(f"  {'Modelo':<12} {'N':<5} {'S_real':<12} {'S_ideal':<12} {'E=S/N':<10} {'Tipo'}")
+        lines.append(f"  {'-'*12} {'-'*4} {'-'*11} {'-'*11} {'-'*9} {'-'*10}")
+        for name, s in stats.items():
+            n = THREAD_COUNT.get(name, 1)
+            if name == 'sequential':
+                lines.append(f"  {'SEQUENTIAL':<12} {1:<5} {'1.0000':<12} {'1.0000':<12} {'1.0000':<10} baseline")
+                continue
+            if name in PERF_MODELS:
+                sp   = seq_cpu_m2 / s['mean'] if s['mean'] > 0 else 0
+                tipo = "real"
+            else:
+                vm_ns = s['vt_mean']
+                sp   = (seq_vt_m2 / vm_ns) if (seq_vt_m2 and vm_ns and vm_ns > 0) else 0
+                tipo = "simulado"
+            eff = sp / n if n > 0 else 0
+            lines.append(f"  {name.upper():<12} {n:<5} {sp:<12.4f} {float(n):<12.4f} {eff:<10.4f} {tipo}")
         lines.append(SEP2)
         lines.append("")
 
