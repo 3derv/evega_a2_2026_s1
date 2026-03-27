@@ -22,6 +22,7 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="$PROJECT_ROOT/build"
 PERF_DIR="$PROJECT_ROOT/results/perf"
+SCRIPTS_DIR="$PROJECT_ROOT/scripts"
 
 cd "$PROJECT_ROOT"
 mkdir -p "$PERF_DIR"
@@ -195,3 +196,24 @@ echo "    - cpu-migrations        → si los hilos migraron entre cores"
 echo ""
 echo "  Referencia oficial perf: https://perfwiki.github.io/main/"
 echo ""
+# ── Generar JSON estructurado desde los archivos .txt ────────────────────────
+PYTHON_CMD=""
+for py in python3 python; do
+    if command -v "$py" &>/dev/null; then PYTHON_CMD="$py"; break; fi
+done
+
+if [ -n "$PYTHON_CMD" ]; then
+    echo "  Generando JSON estructurado de métricas..."
+    if "$PYTHON_CMD" "$SCRIPTS_DIR/perf_to_json.py" \
+        --perf-dir "$PERF_DIR" \
+        --output   "$PERF_DIR/perf_results.json" \
+        --pretty; then
+        echo "  ✓ JSON guardado en: $PERF_DIR/perf_results.json"
+    else
+        echo "  ⚠ Error al generar JSON (revisar perf_to_json.py)"
+    fi
+    echo ""
+else
+    echo "  ⚠ Python no encontrado — JSON no generado."
+    echo ""
+fi

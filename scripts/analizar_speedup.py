@@ -80,18 +80,36 @@ def analyze_csv(csv_path):
         return None
 
     times = np.array(rows)
+    n_t   = len(times)
+    # IC95% = media ± 1.96 × σ_muestral / √n  (distribución t → z para n≥30)
+    ic95_half = 1.96 * times.std(ddof=1) / np.sqrt(n_t) if n_t > 1 else 0.0
     result = {
-        'count': len(times),
-        'mean':   times.mean(),
-        'median': float(np.median(times)),
-        'std':    times.std(),
-        'min':    times.min(),
-        'max':    times.max(),
-        'times':  times,
-        'vt_mean':    int(np.mean(vt_rows))    if vt_rows    else None,
-        'vt_times':   np.array(vt_rows)         if vt_rows    else None,
-        'stall_counts': stall_rows              if stall_rows else None,
+        'count':      n_t,
+        'mean':       float(times.mean()),
+        'median':     float(np.median(times)),
+        'std':        float(times.std(ddof=1)),
+        'min':        float(times.min()),
+        'max':        float(times.max()),
+        'ic95_low':   float(times.mean() - ic95_half),
+        'ic95_high':  float(times.mean() + ic95_half),
+        'ic95_half':  float(ic95_half),
+        'times':      times,
     }
+    if vt_rows:
+        vt = np.array(vt_rows)
+        vt_ic_half = 1.96 * vt.std(ddof=1) / np.sqrt(len(vt)) if len(vt) > 1 else 0.0
+        result['vt_mean']      = int(vt.mean())
+        result['vt_times']     = vt
+        result['vt_ic95_low']  = float(vt.mean() - vt_ic_half)
+        result['vt_ic95_high'] = float(vt.mean() + vt_ic_half)
+        result['vt_ic95_half'] = float(vt_ic_half)
+    else:
+        result['vt_mean']      = None
+        result['vt_times']     = None
+        result['vt_ic95_low']  = None
+        result['vt_ic95_high'] = None
+        result['vt_ic95_half'] = None
+    result['stall_counts'] = stall_rows if stall_rows else None
     return result
 
 
@@ -157,13 +175,16 @@ def format_stats(label, s):
         lines.append(f"  Mediana    : {float(np.median(vt)):.3f} ms")
         lines.append(f"  Mínimo     : {vt.min():.3f} ms")
         lines.append(f"  Máximo     : {vt.max():.3f} ms")
-        lines.append(f"  Desv. Est. : {vt.std():.3f} ms")
+        lines.append(f"  Desv. Est. : {vt.std(ddof=1):.3f} ms")
+        if s.get('vt_ic95_low') is not None:
+            lines.append(f"  IC 95%     : [{s['vt_ic95_low']/1e6:.3f} ms,  {s['vt_ic95_high']/1e6:.3f} ms]")
     lines.append(f"  --- {cpu_label} ---")
     lines.append(f"  Promedio   : {s['mean']:.6f} s")
     lines.append(f"  Mediana    : {s['median']:.6f} s")
     lines.append(f"  Mínimo     : {s['min']:.6f} s")
     lines.append(f"  Máximo     : {s['max']:.6f} s")
     lines.append(f"  Desv. Est. : {s['std']:.6f} s")
+    lines.append(f"  IC 95%     : [{s['ic95_low']:.6f} s,  {s['ic95_high']:.6f} s]")
     if s.get('avg_stalls') is not None:
         lines.append(f"  --- Arquitectura ---")
         lines.append(f"  Stalls Prom.: {s['avg_stalls']:.1f}")
@@ -225,8 +246,11 @@ def generate_graphs(stats, graphs_dir):
         # artefactos; de lo contrario 25 bins.
         n_bins = 1 if vt.std() < 1e-6 else 25
         ax.hist(vt, bins=n_bins, color=c, alpha=0.75, edgecolor='black')
+        ic_h = 1.96 * vt.std(ddof=1) / np.sqrt(len(vt)) if len(vt) > 1 else 0
         ax.axvline(vt.mean(), color='black', linestyle='--', linewidth=1.5,
-                   label=f'μ={vt.mean():.3f} ms\nσ={vt.std():.4f} ms')
+                   label=(f'μ={vt.mean():.3f} ms\n'
+                          f'σ={vt.std(ddof=1):.4f} ms\n'
+                          f'IC95=[{vt.mean()-ic_h:.3f}, {vt.mean()+ic_h:.3f}]'))
         ax.set_xlim(vt_global_min - vt_margin, vt_global_max + vt_margin)
         ax.set_title(lbl.upper(), fontweight='bold', fontsize=13)
         ax.set_xlabel('Tiempo Virtual por frame (ms)', fontsize=10)
@@ -281,8 +305,19 @@ def generate_graphs(stats, graphs_dir):
             sp_margin = max((sp_max - sp_min) * 0.5, 0.005)
 
             fig, ax = plt.subplots(figsize=(9, 6))
+            # IC95% del speedup propagado: σ_speedup ≈ (seq_VT / VT²) × σ_VT
+            sp_ic95 = []
+            for l in other:
+                vt_arr = vt_series(other[l])
+                if len(vt_arr) > 1:
+                    se = vt_arr.std(ddof=1) / np.sqrt(len(vt_arr))
+                    # δS/δVT = -seq_VT/VT²; IC propagado
+                    sp_ic95.append(1.96 * se * (seq_vt / vt_mean_ms(other[l])**2))
+                else:
+                    sp_ic95.append(0.0)
             bars = ax.bar(xlabels, speedups, color=bar_colors, alpha=0.8,
-                          edgecolor='black', width=0.4)
+                          edgecolor='black', width=0.4,
+                          yerr=sp_ic95, capsize=5, error_kw={'ecolor':'black','elinewidth':1.5})
             for bar, sv in zip(bars, speedups):
                 pct = (sv - 1.0) * 100
                 sign = '+' if pct >= 0 else ''
@@ -830,14 +865,19 @@ def main():
     metrics_rows = [
         # Tiempo virtual (métrica principal)
         ('VT Promedio',    lambda s: vt_ms(s, lambda v: v.mean())),
-        ('VT Mínimo',     lambda s: vt_ms(s, lambda v: v.min())),
-        ('VT Máximo',     lambda s: vt_ms(s, lambda v: v.max())),
-        ('VT Desv.Est.',   lambda s: vt_ms(s, lambda v: v.std())),
+        ('VT Mínimo',      lambda s: vt_ms(s, lambda v: v.min())),
+        ('VT Máximo',      lambda s: vt_ms(s, lambda v: v.max())),
+        ('VT Desv.Est.',   lambda s: vt_ms(s, lambda v: v.std(ddof=1))),
+        # IC95% de VT
+        ('VT IC95-bajo',   lambda s: f"{s['vt_ic95_low']/1e6:.3f} ms"  if s.get('vt_ic95_low')  is not None else 'N/A'),
+        ('VT IC95-alto',   lambda s: f"{s['vt_ic95_high']/1e6:.3f} ms" if s.get('vt_ic95_high') is not None else 'N/A'),
         # Tiempo CPU (referencia)
         ('CPU Promedio',   lambda s: f"{s['mean']:.6f} s"),
-        ('CPU Mínimo',    lambda s: f"{s['min']:.6f} s"),
-        ('CPU Máximo',    lambda s: f"{s['max']:.6f} s"),
+        ('CPU Mínimo',     lambda s: f"{s['min']:.6f} s"),
+        ('CPU Máximo',     lambda s: f"{s['max']:.6f} s"),
         ('CPU Desv.Est.',  lambda s: f"{s['std']:.6f} s"),
+        ('CPU IC95-bajo',  lambda s: f"{s['ic95_low']:.6f} s"),
+        ('CPU IC95-alto',  lambda s: f"{s['ic95_high']:.6f} s"),
         # Arquitectura
         ('Stalls Prom.',   lambda s: f"{s['avg_stalls']:.1f}"  if s.get('avg_stalls') is not None else 'N/A'),
         ('CPI',            lambda s: f"{s['cpi']:.4f}"          if s.get('cpi')        is not None else 'N/A'),
