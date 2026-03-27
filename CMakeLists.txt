@@ -13,6 +13,7 @@ add_executable(raytracer
     src/FinegrainedRenderer.cpp
     src/CoarseRenderer.cpp
     src/SMTRenderer.cpp
+    src/CMPRenderer.cpp
 )
 
 # Flags de compilación

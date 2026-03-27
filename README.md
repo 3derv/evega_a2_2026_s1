@@ -5,13 +5,13 @@ Cada modelo simula cómo un procesador organiza sus threads y maneja los stalls 
 
 ## Modelos implementados
 
-| Modelo | Scheduler | Rotación | Costo stall |
-|--------|-----------|----------|--------------|
-| **Sequential** | Ninguno (1 hilo) | — | `CACHE_MISS_PENALTY_NS = 3200 ns` (stall completo) |
-| **FGMT** | Reloj global (`clock % NUM_THREADS == tid`) | Cada ciclo (obligatoria) | `NOP_PENALTY_NS = 100 ns` (stall oculto) |
-| **CGMT** | `current_thread` + `switch_to_next_thread()` | Solo en stall | `PIXEL_QUANTUM_NS + CONTEXT_SWITCH_COST_NS = 1400 ns` |
-
-Modelos en desarrollo: SMT, CMP.
+| Modelo | Scheduler | Rotación | Costo stall | VT |
+|--------|-----------|----------|-------------|----|
+| **Sequential** | 1 hilo | — | `CACHE_MISS_PENALTY_NS = 3200 ns` | suma |
+| **FGMT** | 4 contextos, 1 pipeline | Cada ciclo (obligatoria) | `PIXEL_QUANTUM_NS = 1000 ns` (quantum perdido) | suma |
+| **CGMT** | 4 contextos, 1 pipeline | Solo en stall | 0 ns (stall oculto, CPI ideal = 10.0) | suma |
+| **SMT** | Simulación pura W=2 | Por slot disponible | 0 ns (stall oculto + W=2) | `global_clock × Q` |
+| **CMP** | N=4 OS threads, cores físicos | Paralelo real | `CACHE_MISS_PENALTY_NS` por core (sin ocultar) | `max(VT por core)` |
 
 ## Estructura del proyecto
 
@@ -19,9 +19,11 @@ Modelos en desarrollo: SMT, CMP.
 .
 ├── src/                        # Implementaciones (.cpp)
 │   ├── main.cpp                # CLI, Factory, GenericRunner, salida de stats
-│   ├── SequentialRenderer.cpp  # Modelo baseline
-│   ├── FinegrainedRenderer.cpp # Modelo FGMT con reloj global explícito
-│   ├── CoarseRenderer.cpp      # Modelo CGMT con scheduler round-robin
+│   ├── SequentialRenderer.cpp  # Modelo baseline (1 hilo)
+│   ├── FinegrainedRenderer.cpp # Modelo FGMT (semáforos por thread)
+│   ├── CoarseRenderer.cpp      # Modelo CGMT (scheduler round-robin)
+│   ├── SMTRenderer.cpp         # Modelo SMT (simulación pura W=2, sin OS threads)
+│   ├── CMPRenderer.cpp         # Modelo CMP (N=4 cores, OS threads reales)
 │   └── Exporter.cpp            # Guardar PPM e imagen CSV
 ├── include/                    # Headers
 │   ├── IRenderer.h             # Interfaz abstracta (polimorfismo)
@@ -52,27 +54,30 @@ cd ..
 ### 2. Ejecutar un modelo
 
 ```bash
-./build/raytracer --model sequential --runs 200
-./build/raytracer --model fgmt      --runs 200
-./build/raytracer --model cgmt      --runs 200
+./build/raytracer --model sequential
+./build/raytracer --model fgmt
+./build/raytracer --model cgmt
+./build/raytracer --model smt
+./build/raytracer --model cmp
 ./build/raytracer --help
 ```
 
 Salida por stdout incluye: tiempo real (avg/min/max/stddev), tiempo virtual (ns),
-stalls promedio, CPI y estadísticas por thread (FGMT y CGMT).
+stalls promedio, CPI y estadísticas por thread (todos los modelos paralelos).
 
 ### 3. Ejecutar todos los modelos y generar análisis completo
 
 ```bash
-# Uso recomendado — compila, ejecuta los 3 modelos, valida imágenes y genera gráficas
-./scripts/run_all_models.sh          # 200 runs (por defecto)
-./scripts/run_all_models.sh 500      # número de runs personalizado
+# Compila, ejecuta los 5 modelos, valida imágenes y genera gráficas
+./scripts/run_all_models.sh
+./scripts/run_all_models.sh --skip-fgmt   # omitir modelos lentos
+./scripts/run_all_models.sh --skip-cmp
 ```
 
 Genera en `results/`:
-- `mediciones_secuencial.csv`, `mediciones_fgmt.csv`, `mediciones_cgmt.csv`
+- `mediciones_secuencial.csv`, `mediciones_fgmt.csv`, `mediciones_cgmt.csv`, `mediciones_smt.csv`, `mediciones_cmp.csv`
 - `speedup_report.log` — reporte de speedup, stalls, CPI e información PPM
-- `graficas/` — 5 gráficas PNG comparativas
+- `graficas/` — 6 gráficas PNG comparativas (incluyendo speedup CPU para SMT/CMP)
 - `image/` — `frame_*.ppm` de cada modelo (deben ser byte-exactas)
 
 ### 4. Ejecutar un solo modelo con script individual
@@ -81,21 +86,14 @@ Genera en `results/`:
 ./scripts/run_mediciones_secuencial.sh   # sequential, genera gráfica propia
 ./scripts/run_mediciones_fgmt.sh         # fgmt vs sequential
 ./scripts/run_mediciones_cgmt.sh         # sequential + fgmt + cgmt
+./scripts/run_mediciones_cmp.sh          # cmp vs sequential
 ```
 
-### 5. Análisis desde CSVs existentes
+### 5. Generar GIF de animación
 
 ```bash
-# Reporte de speedup + gráficas (requiere los 3 CSVs ya generados)
-python3 scripts/analizar_speedup.py \
-    results/mediciones_secuencial.csv \
-    results/mediciones_fgmt.csv \
-    results/mediciones_cgmt.csv \
-    --graphs results/graficas \
-    --log    results/speedup_report.log
-
-# Gráfica individual desde un CSV
-python3 scripts/generar_graficas.py results/mediciones_fgmt.csv
+./scripts/make_gif_sequential.sh   # GIF del modelo sequential
+./scripts/make_gif_cmp.sh          # GIF del modelo CMP
 ```
 
 ## Reloj virtual
@@ -105,17 +103,28 @@ independientemente del tiempo real del SO.
 
 | Constante | Valor | Descripción |
 |-----------|-------|-------------|
-| `PIXEL_QUANTUM_NS` | 1000 ns | 1 slot de pipeline = 10 ciclos × 100 ns |
-| `NOP_PENALTY_NS` | 100 ns | 1 ciclo NOP (FGMT: detección de miss) |
-| `CACHE_MISS_PENALTY_NS` | 3200 ns | Stall completo = 32 NOPs (Solo Sequential) |
-| `CONTEXT_SWITCH_COST_NS` | 400 ns | Overhead de context switch (Solo CGMT) |
+| `PIXEL_QUANTUM_NS` | 1000 ns | 1 slot de pipeline por pixel |
+| `NOP_PENALTY_NS` | 100 ns | 1 ciclo base (usado en `CACHE_MISS_PENALTY_NS`) |
+| `CACHE_MISS_PENALTY_NS` | 3200 ns | Stall completo = 32 NOPs (Sequential y CMP por core) |
+| `CACHE_SIZE` | 256 B | Miss rate ~25% → ~409 stalls/frame (diferencias visibles) |
+| `CMP_NUM_CORES` | 4 | Núcleos independientes en CMP |
 
-**CPI reportado**: `virtual_time_ns / (NOP_PENALTY_NS × total_pixels)`. CPI ideal = 10.0.
+**CPI reportado**: `virtual_time_ns / (PIXEL_QUANTUM_NS × total_pixels)`. CPI ideal CGMT = 10.0.
+
+**SpeedUp esperado** (200 frames, CACHE_SIZE=256):
+
+| Modelo | VT prom | SpeedUp |
+|--------|---------|---------|
+| Sequential | ~6.1 ms | 1.00× |
+| FGMT | ~5.2 ms | ~1.17× |
+| CGMT | ~4.8 ms | ~1.27× |
+| SMT | ~2.4 ms | ~2.51× |
+| CMP | ~1.5 ms | ~3.95× |
 
 ## Arquitectura de software
 
 - **SOLID** — `RendererFactory` usa registry map (OCP); `GenericRunner` depende de `IRenderer` (DIP); `switch_to_next_thread()` extrae responsabilidad del scheduler (SRP).
-- **DRY** — `make_ray()` en `Ray.h` compartida por los 3 renderers; `reset_thread_stats()` y `sum_virtual_times()` en `RendererUtils.h`; rutas de archivos resueltas una sola vez en `Exporter`.
+- **DRY** — `make_ray()` en `Ray.h` compartida por todos los renderers; `reset_thread_stats()` en `RendererUtils.h`; rutas de archivos resueltas una sola vez en `Exporter`.
 
 ## Cómo agregar un nuevo modelo
 

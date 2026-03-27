@@ -6,6 +6,7 @@
 #include "FinegrainedRenderer.h"
 #include "CoarseRenderer.h"
 #include "SMTRenderer.h"
+#include "CMPRenderer.h"
 #include <functional>
 #include <memory>
 #include <stdexcept>
@@ -29,6 +30,7 @@ class RendererFactory {
             {"fgmt",       [] { return std::make_unique<FinegrainedRenderer>(); }},
             {"cgmt",       [] { return std::make_unique<CoarseRenderer>(); }},
             {"smt",        [] { return std::make_unique<SMTRenderer>(); }},
+            {"cmp",        [] { return std::make_unique<CMPRenderer>(); }},
         };
         return reg;
     }
@@ -36,7 +38,6 @@ class RendererFactory {
     // Registro de modelos en desarrollo: modelo → mensaje de error.
     static const std::unordered_map<std::string, std::string>& dev_registry() {
         static const std::unordered_map<std::string, std::string> reg = {
-            {"cmp", "CMP is still in development. Use '--model sequential', '--model fgmt', '--model cgmt', or '--model smt' for now."},
         };
         return reg;
     }
