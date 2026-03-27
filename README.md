@@ -70,15 +70,30 @@ stalls promedio, CPI y estadísticas por thread (todos los modelos paralelos).
 ```bash
 # Compila, ejecuta los 5 modelos, valida imágenes y genera gráficas
 ./scripts/run_all_models.sh
-./scripts/run_all_models.sh --skip-fgmt   # omitir modelos lentos
-./scripts/run_all_models.sh --skip-cmp
+./scripts/run_all_models.sh --skip-fgmt            # omitir FGMT (~100s)
+./scripts/run_all_models.sh --skip-fgmt --with-perf  # incluir perf stat
 ```
 
+Flags disponibles: `--skip-fgmt`, `--skip-smt`, `--skip-cmp`, `--with-perf`.
+
 Genera en `results/`:
-- `mediciones_secuencial.csv`, `mediciones_fgmt.csv`, `mediciones_cgmt.csv`, `mediciones_smt.csv`, `mediciones_cmp.csv`
-- `speedup_report.log` — reporte de speedup, stalls, CPI e información PPM
-- `graficas/` — 6 gráficas PNG comparativas (incluyendo speedup CPU para SMT/CMP)
+- `mediciones_*.csv` — 200 mediciones por modelo
+- `speedup_report.log` — speedup, eficiencia paralela, escalabilidad, CPI, stalls
+- `graficas/` — 10 gráficas PNG comparativas (ver tabla abajo)
 - `image/` — `frame_*.ppm` de cada modelo (deben ser byte-exactas)
+
+| Gráfica | Descripción |
+|---------|-------------|
+| `01_histogram_comparativo.png` | Histograma de VT por frame, eje X compartido |
+| `02_boxplot_comparativo.png` | Boxplot VT — todos los modelos |
+| `03_speedup_comparison.png` | Speed Up VT vs Sequential |
+| `04_timeline_executions.png` | VT por frame (animación 200 frames) |
+| `05_virtual_time_comparison.png` | VT promedio: escala completa + overhead |
+| `06_cpu_speedup_smt_cmp.png` | Speed Up CPU wall-clock — SMT y CMP |
+| `07_efficiency.png` | **Eficiencia paralela** E = S/N por modelo |
+| `08_scalability.png` | **Escalabilidad**: N vs Speedup real vs ideal |
+| `09_modeled_group_comparison.png` | **Grupo simulado**: seq vs fgmt vs cgmt (VT) |
+| `10_real_group_comparison.png` | **Grupo real**: seq vs smt vs cmp (CPU) |
 
 ### 4. Ejecutar un solo modelo con script individual
 
@@ -96,6 +111,36 @@ Genera en `results/`:
 ./scripts/make_gif_cmp.sh          # GIF del modelo CMP
 ```
 
+### 6. Comparativa SMT ON vs OFF (hardware real)
+
+Mide el modelo CMP con Hyper-Threading activado y desactivado para cuantificar
+el efecto del SMT hardware en el rendimiento real. Requiere `sudo`.
+
+```bash
+./scripts/run_smt_comparison.sh
+# Controlar manualmente:
+echo off | sudo tee /sys/devices/system/cpu/smt/control   # desactivar
+echo on  | sudo tee /sys/devices/system/cpu/smt/control   # activar
+cat /sys/devices/system/cpu/smt/control                   # ver estado
+```
+
+Guarda `results/mediciones_cmp_smt_on.csv`, `mediciones_cmp_smt_off.csv` y
+la gráfica `results/graficas/11_smt_on_vs_off.png`.
+
+### 7. Perfilado con `perf stat`
+
+Captura contadores de hardware (cycles, instructions, cache-misses, branches)
+y software (task-clock, context-switches) para cualquier modelo.
+Referencia: <https://perfwiki.github.io/main/>
+
+```bash
+./scripts/run_perf.sh                        # todos los modelos
+./scripts/run_perf.sh sequential cmp smt     # modelos específicos
+```
+
+Guarda los resultados en `results/perf/perf_<modelo>.txt`. Las métricas de CPI,
+IPC y tasa de cache-miss permiten correlacionar con los modelos de ejecución.
+
 ## Reloj virtual
 
 Cada modelo acumula tiempo virtual (ns) para modelar la carga sobre el pipeline,
@@ -111,15 +156,17 @@ independientemente del tiempo real del SO.
 
 **CPI reportado**: `virtual_time_ns / (PIXEL_QUANTUM_NS × total_pixels)`. CPI ideal CGMT = 10.0.
 
-**SpeedUp esperado** (200 frames, CACHE_SIZE=256):
+**Resultados verificados** (200 frames, CACHE_SIZE=256, hardware físico):
 
-| Modelo | VT prom | SpeedUp |
-|--------|---------|---------|
-| Sequential | ~6.1 ms | 1.00× |
-| FGMT | ~5.2 ms | ~1.17× |
-| CGMT | ~4.8 ms | ~1.27× |
-| SMT | ~2.4 ms | ~2.51× |
-| CMP | ~1.5 ms | ~3.95× |
+| Modelo | Métrica | VT/CPU prom | SpeedUp | Eficiencia (E=S/N) | CPI |
+|------------|---------|-------------|---------|---------------------|-----|
+| Sequential | VT | 6.110 ms | 1.00× | 1.000 (baseline) | 12.73 |
+| FGMT | VT | 5.215 ms | 1.17× | 0.293 (N=4) | 10.87 |
+| CGMT | VT | 4.800 ms | 1.27× | 0.318 (N=4) | 10.00 |
+| SMT | CPU | ~1.04 ms | 2.51×\* | — | 5.07 |
+| CMP | CPU | ~1.00 ms | 3.95×\* | — | 3.22 |
+
+\* SpeedUp de VT (reloj simulado). CPU wall-clock de SMT/CMP varía con carga del SO.
 
 ## Arquitectura de software
 
