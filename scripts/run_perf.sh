@@ -41,22 +41,50 @@ echo ""
 echo "  Referencia: https://perfwiki.github.io/main/"
 echo ""
 
+# ── Detectar entorno virtualizado (WSL / VM) ─────────────────────────────────
+IS_WSL=false
+if grep -qi microsoft /proc/version 2>/dev/null || grep -qi wsl /proc/sys/kernel/osrelease 2>/dev/null; then
+    IS_WSL=true
+    echo "  ⚠ Entorno WSL2 detectado."
+    echo "    Los contadores de hardware (cycles, cache-misses) NO están disponibles en WSL."
+    echo "    El enunciado requiere mediciones en hardware físico dedicado."
+    echo "    Solo se usarán contadores de software (task-clock, context-switches)."
+fi
+echo ""
+
 # ── Verificar disponibilidad de perf ─────────────────────────────────────────
-if ! command -v perf &> /dev/null; then
-    echo "  ✗ 'perf' no está instalado."
+PERF_REAL=""
+# Buscar perf funcional para el kernel actual
+for candidate in perf "perf_$(uname -r)" /usr/lib/linux-tools/*/perf; do
+    if "$candidate" --version &>/dev/null 2>&1; then
+        PERF_REAL="$candidate"
+        break
+    fi
+done
+
+if [ -z "$PERF_REAL" ]; then
+    echo "  ✗ 'perf' no está disponible o no funciona para este kernel."
     echo "    Instalar con:"
-    echo "      sudo apt install linux-perf          # Debian / Ubuntu"
-    echo "      sudo dnf install perf                # Fedora / RHEL"
-    echo "      sudo pacman -S perf                  # Arch"
+    echo "      sudo apt install linux-tools-\$(uname -r) linux-tools-generic"
+    echo ""
+    echo "  Alternativa en WSL2: ejecutar en hardware físico (requerido por el enunciado)."
     exit 1
 fi
-PERF_VER=$(perf --version 2>&1 | head -1)
+
+# Probar que perf realmente funciona (puede existir pero no funcionar en WSL)
+PERF_TEST=$(timeout 5 "$PERF_REAL" stat -e task-clock echo ok 2>&1 || true)
+if echo "$PERF_TEST" | grep -q "not found\|Permission denied\|No such file"; then
+    echo "  ✗ perf existe pero no funciona en este entorno."
+    exit 1
+fi
+
+PERF_VER=$("$PERF_REAL" --version 2>&1 | head -1)
 echo "  perf disponible : $PERF_VER"
 
 # Verificar permiso de acceso a contadores hardware (paranoid level)
 PARANOID=$(cat /proc/sys/kernel/perf_event_paranoid 2>/dev/null || echo "desconocido")
 echo "  perf_event_paranoid : $PARANOID"
-if [ "$PARANOID" -gt 1 ] 2>/dev/null; then
+if [ "$PARANOID" -gt 1 ] 2>/dev/null && [ "$IS_WSL" = false ]; then
     echo "  ⚠ paranoid=$PARANOID — contadores hardware pueden estar restringidos."
     echo "    Para habilitar temporalmente:"
     echo "      echo 0 | sudo tee /proc/sys/kernel/perf_event_paranoid"
@@ -86,41 +114,51 @@ for model in "${MODELS[@]}"; do
         echo "  PERF STAT — Modelo: ${model^^}"
         echo "  Fecha : $(date '+%Y-%m-%d %H:%M:%S')"
         echo "  Cmd   : $BUILD_DIR/raytracer --model $model"
+        [ "$IS_WSL" = true ] && echo "  Entorno: WSL2 — contadores hardware no disponibles"
         echo "=================================================================="
-        echo ""
-        echo "--- Contadores de hardware (ciclos, instrucciones, caché, ramas) ---"
-        echo "    (ciclos/instrucciones → CPI / IPC)"
-        echo "    (cache-misses → stalls de memoria que el scheduler intenta ocultar)"
         echo ""
     } > "$OUT_FILE"
 
-    # Intentar con contadores hardware primero
-    if perf stat \
-        -e "$HW_EVENTS" \
-        "$BUILD_DIR/raytracer" --model "$model" \
-        >> "$OUT_FILE" 2>&1; then
-        echo "    ✓ Contadores hardware OK"
+    # Intentar contadores hardware solo en hardware físico (no WSL)
+    if [ "$IS_WSL" = false ]; then
+        {
+            echo "--- Contadores de hardware (ciclos, instrucciones, caché, ramas) ---"
+            echo "    CPI = cycles/instructions  |  IPC = instructions/cycles"
+            echo "    cache-miss rate = cache-misses/cache-references * 100"
+            echo ""
+        } >> "$OUT_FILE"
+        if timeout 60 "$PERF_REAL" stat \
+            -e "$HW_EVENTS" \
+            -- "$BUILD_DIR/raytracer" --model "$model" \
+            >> "$OUT_FILE" 2>&1; then
+            echo "    ✓ Contadores hardware OK"
+        else
+            echo "    ⚠ Contadores hardware no disponibles."
+            echo "(contadores hardware no disponibles)" >> "$OUT_FILE"
+        fi
     else
-        echo "    ⚠ Contadores hardware no disponibles (normal en VM/contenedor)."
-        echo "      Se usarán solo contadores de software."
-        echo "(contadores hardware no disponibles en este entorno)" >> "$OUT_FILE"
+        echo "    ⚠ WSL2: contadores hardware omitidos (requiere hardware físico)" | tee -a "$OUT_FILE"
     fi
 
     {
         echo ""
-        echo "--- Contadores de software (task-clock, context-switches, page-faults) ---"
-        echo "    (context-switches → cambios de contexto del SO durante la ejecución)"
-        echo "    (cpu-migrations   → si el hilo migró entre CPUs físicos)"
+        echo "--- Contadores de software (siempre disponibles) ---"
+        echo "    task-clock       → tiempo de CPU usado (ms)"
+        echo "    context-switches → cambios de contexto del SO"
+        echo "    cpu-migrations   → migraciones entre CPUs físicos"
+        echo "    page-faults      → fallos de página"
         echo ""
     } >> "$OUT_FILE"
 
-    perf stat \
+    if timeout 60 "$PERF_REAL" stat \
         -e "$SW_EVENTS" \
-        "$BUILD_DIR/raytracer" --model "$model" \
-        >> "$OUT_FILE" 2>&1 || {
+        -- "$BUILD_DIR/raytracer" --model "$model" \
+        >> "$OUT_FILE" 2>&1; then
+        echo "    ✓ Contadores software OK"
+    else
         echo "    ⚠ Contadores software también fallaron."
         echo "(contadores software no disponibles)" >> "$OUT_FILE"
-    }
+    fi
 
     {
         echo ""
