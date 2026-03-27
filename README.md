@@ -156,17 +156,19 @@ independientemente del tiempo real del SO.
 
 **CPI reportado**: `virtual_time_ns / (PIXEL_QUANTUM_NS × total_pixels)`. CPI ideal CGMT = 10.0.
 
-**Resultados verificados** (200 frames, CACHE_SIZE=256, hardware físico):
+**Resultados de referencia** (200 frames, CACHE_SIZE=256, medición en WSL2 — valores en HW físico diferirán):
 
-| Modelo | Métrica | VT/CPU prom | SpeedUp | Eficiencia (E=S/N) | CPI |
+| Modelo | Métrica | VT prom | SpeedUp VT | Eficiencia (E=S/N) | CPI |
 |------------|---------|-------------|---------|---------------------|-----|
 | Sequential | VT | 6.110 ms | 1.00× | 1.000 (baseline) | 12.73 |
 | FGMT | VT | 5.215 ms | 1.17× | 0.293 (N=4) | 10.87 |
 | CGMT | VT | 4.800 ms | 1.27× | 0.318 (N=4) | 10.00 |
-| SMT | CPU | ~1.04 ms | 2.51×\* | — | 5.07 |
-| CMP | CPU | ~1.00 ms | 3.95×\* | — | 3.22 |
+| SMT | VT\* | 2.436 ms | 2.51× | — | 5.07 |
+| CMP | VT\* | 1.547 ms | 3.95× | 0.988 (N=4) | 3.22 |
 
-\* SpeedUp de VT (reloj simulado). CPU wall-clock de SMT/CMP varía con carga del SO.
+\* SMT VT = `global_clock × PIXEL_QUANTUM_NS` (reloj del pipeline W=2).
+  CMP VT = `max(VT_core_i)` (core más lento de N=4).
+  SpeedUp calculado sobre VT vs Sequential. Ver [docs/analisis_tecnico.md](docs/analisis_tecnico.md) para el análisis completo.
 
 ## Arquitectura de software
 
@@ -208,6 +210,16 @@ Lee `docs/instructions.md` para:
 - Observaciones específicas por modelo
 - Cómo modelar stalls, clocks, quanta
 - Requisitos de validación
+
+Lee `docs/analisis_tecnico.md` para:
+- Análisis teórico vs. resultados observados por modelo
+- Ley de Amdahl aplicada (CMP eficiencia ≈ 98.8%)
+- Ocultamiento de latencia FGMT/CGMT
+- Limitaciones del entorno WSL2 y plan para hardware físico
+
+Lee `docs/rubrica_analisis.md` para:
+- Estado actual vs. rúbrica de evaluación
+- Plan de acción priorizado para la entrega
 
 ## Requisitos
 
