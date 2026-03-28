@@ -1,6 +1,7 @@
 #include "CMPRenderer.h"
 #include "Constants.h"
 #include "Ray.h"
+#include "RendererUtils.h"
 #include <algorithm>
 #include <thread>
 
@@ -46,6 +47,7 @@ void CMPRenderer::render_core_worker(int core_id) {
     CacheModel&    cache = cache_models_[core_id];
     const CoreTile& tile = tiles_[core_id];
 
+    int local_cycle = 0;
     for (int idx = tile.start; idx < tile.end; ++idx) {
         const int x = idx % IMAGE_WIDTH;
         const int y = idx / IMAGE_WIDTH;
@@ -55,6 +57,7 @@ void CMPRenderer::render_core_worker(int core_id) {
 
         // Quantum base: un ciclo de pipeline productivo
         stats.virtual_time_ns += PIXEL_QUANTUM_NS;
+        logger_.log_compute(local_cycle, core_id, x, y, PIXEL_QUANTUM_NS);
 
         if (cache.is_cache_miss(x, y)) {
             // Stall del núcleo: no hay otro contexto que tome el pipeline.
@@ -62,19 +65,19 @@ void CMPRenderer::render_core_worker(int core_id) {
             // Costo idéntico al modelo Sequential pero solo sobre 1/N del frame.
             stats.virtual_time_ns += CACHE_MISS_PENALTY_NS;
             stats.cache_misses++;
+            logger_.log_stall(local_cycle, core_id, x, y, CACHE_MISS_PENALTY_NS, "no ctx switch");
         }
+
+        ++local_cycle;
     }
+    logger_.log_done(local_cycle, core_id);
 }
 
 std::vector<Vector3> CMPRenderer::render_frame() {
-    // Resetear estadísticas y caches de todos los núcleos
-    for (int i = 0; i < CMP_NUM_CORES; ++i) {
-        cache_models_[i].reset();
-        core_stats_[i].nops_count      = 0;
-        core_stats_[i].nop_time_ns     = 0.0;
-        core_stats_[i].cache_misses    = 0;
-        core_stats_[i].virtual_time_ns = 0LL;
-    }
+    // Resetear estadísticas y caches de todos los núcleos (DRY: misma lógica que FGMT/CGMT)
+    trace::reset_thread_stats(core_stats_, cache_models_);
+
+    logger_.log_header("cmp", CMP_NUM_CORES, 1, PIXEL_QUANTUM_NS, CACHE_MISS_PENALTY_NS);
 
     // Lanzar CMP_NUM_CORES OS threads: cada uno corre en un core físico distinto.
     // No hay sincronización inter-nucleo durante la ejecución — independencia total.

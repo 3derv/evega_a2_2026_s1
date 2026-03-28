@@ -7,6 +7,7 @@
 #include "Metrics.h"
 #include "Ray.h"
 #include "Constants.h"
+#include "SchedulerLogger.h"
 #include <vector>
 #include <thread>
 
@@ -45,6 +46,7 @@ private:
 
     long long virtual_time_ns_ = 0LL;
     Vector3   camera_pos_;
+    SchedulerLogger logger_; // Traza ciclo-a-ciclo (activar con set_verbose)
 
     // Worker ejecutado por cada núcleo en un OS thread independiente.
     // Procesa su tile de forma autónoma (Sequential-like) sin coordinación
@@ -59,6 +61,10 @@ public:
 
     // Actualiza la posición de cámara antes de render_frame() (órbita elíptica).
     void set_camera_pos(const Vector3& pos) override { camera_pos_ = pos; }
+
+    // Habilita la traza del scheduler para los primeros `cycles` ciclos de pipeline.
+    // En CMP los núcleos corren en paralelo real: las líneas de log pueden intercalarse.
+    void set_verbose(int cycles) override { logger_.set_max_cycles(cycles); }
 
     // render_frame(): lanza CMP_NUM_CORES OS threads, espera a que todos terminen
     // y retorna el frame completo.

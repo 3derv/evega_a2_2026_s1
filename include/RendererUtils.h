@@ -11,9 +11,11 @@ namespace trace {
 // reset_thread_stats: Reinicia el estado de contadores y caches de todos
 // los threads antes de iniciar un nuevo render_frame().
 //
-// Extrae la lógica duplicada que existía en FinegrainedRenderer y CoarseRenderer.
-// Los campos que reinicia son los mismos en ambos modelos; CoarseRenderer
-// adicionalmente reinicia thread_done[] (scheduler-specific, no incluido aquí).
+// Extrae la lógica de reset duplicada en FinegrainedRenderer, CoarseRenderer
+// y CMPRenderer. Itera sobre el tamaño real del vector para ser agnóstico a
+// la constante (NUM_THREADS vs CMP_NUM_CORES — ambas son 4, pero conceptualmente
+// distintas).
+// CoarseRenderer adicionalmente reinicia thread_done[] (scheduler-specific, fuera de aquí).
 inline void reset_thread_stats(
     std::vector<ThreadMetrics>& stats,
     std::vector<CacheModel>&    caches)

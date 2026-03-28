@@ -6,6 +6,7 @@
 #include "Ray.h"
 #include "CacheModel.h"
 #include "Constants.h"
+#include "SchedulerLogger.h"
 #include <vector>
 
 // SequentialRenderer: modelo de referencia sin multithreading (baseline).
@@ -23,6 +24,7 @@ private:
     long long virtual_time_ns_ = 0LL; // Tiempo de reloj virtual del ultimo render_frame()
     int stall_count_ = 0;             // Cache misses en el ultimo render_frame()
     Vector3 camera_pos_;              // Posición de cámara para el frame actual
+    SchedulerLogger logger_;          // Traza ciclo-a-ciclo (activar con set_verbose)
 
 public:
     SequentialRenderer();
@@ -30,6 +32,9 @@ public:
     // Actualiza la posición de la cámara antes de render_frame().
     // GenericRunner la llama una vez por frame con la posición de la órbita.
     void set_camera_pos(const Vector3& pos) override { camera_pos_ = pos; }
+
+    // Habilita la traza del scheduler para los primeros `cycles` ciclos de pipeline.
+    void set_verbose(int cycles) override { logger_.set_max_cycles(cycles); }
 
     // Proyecta el pixel (x, y) usando make_ray con look-at desde camera_pos_.
     Vector3 render_pixel(int x, int y) const {

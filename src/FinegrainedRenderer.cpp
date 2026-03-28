@@ -2,6 +2,7 @@
 #include "Constants.h"
 #include "Ray.h"
 #include "RendererUtils.h"
+#include <cmath>
 
 using namespace constants;
 using namespace trace;
@@ -10,13 +11,28 @@ FinegrainedRenderer::FinegrainedRenderer()
     : scene(), frame(IMAGE_HEIGHT * IMAGE_WIDTH) {
 
     tiles.resize(NUM_THREADS);
-    int tile_width  = IMAGE_WIDTH  / 2;
-    int tile_height = IMAGE_HEIGHT / 2;
 
-    tiles[0] = {0,          tile_width,  0,           tile_height,  0};
-    tiles[1] = {tile_width, IMAGE_WIDTH, 0,           tile_height,  1};
-    tiles[2] = {0,          tile_width,  tile_height, IMAGE_HEIGHT, 2};
-    tiles[3] = {tile_width, IMAGE_WIDTH, tile_height, IMAGE_HEIGHT, 3};
+    // Grilla 2D derivada de NUM_THREADS: ncols = sqrt(N), nrows = N/ncols.
+    // Para NUM_THREADS=4 → ncols=2, nrows=2 (misma grilla 2×2 que antes).
+    // Si NUM_THREADS cambia a, p. ej., 1 o 2, la grilla se recalcula.
+    // Las celdas de la última columna/fila usan IMAGE_WIDTH/IMAGE_HEIGHT como
+    // borde derecho/inferior, absorbiendo píxeles sobrantes cuando la imagen
+    // no es divisible exactamente entre ncols o nrows.
+    const int ncols  = std::max(1, static_cast<int>(std::round(std::sqrt(static_cast<double>(NUM_THREADS)))));
+    const int nrows  = NUM_THREADS / ncols;
+    const int base_w = IMAGE_WIDTH  / ncols;
+    const int base_h = IMAGE_HEIGHT / nrows;
+
+    for (int r = 0; r < nrows; ++r) {
+        for (int c = 0; c < ncols; ++c) {
+            int tid = r * ncols + c;
+            int xs  = c * base_w;
+            int xe  = (c == ncols - 1) ? IMAGE_WIDTH  : xs + base_w;
+            int ys  = r * base_h;
+            int ye  = (r == nrows - 1) ? IMAGE_HEIGHT : ys + base_h;
+            tiles[tid] = {xs, xe, ys, ye, tid};
+        }
+    }
 
     cache_models.resize(NUM_THREADS);
     // Semilla determinista por thread: misma escena → mismo patrón de misses
@@ -54,6 +70,9 @@ void FinegrainedRenderer::render_tile_worker(int thread_id) {
         // Salida: todos los tiles terminaron (broadcast recibido)
         if (threads_completed_.load(std::memory_order_acquire) == NUM_THREADS) break;
 
+        // Capturar ciclo global antes de procesar: serializado por el semáforo.
+        const int cycle = global_cycle_.fetch_add(1, std::memory_order_relaxed);
+
         // Ciclo de pipeline: este thread tiene píxeles pendientes
         if (cache.is_cache_miss(x, y)) {
             // STALL: el slot se ocupa con un NOP de duración PIXEL_QUANTUM_NS.
@@ -64,14 +83,17 @@ void FinegrainedRenderer::render_tile_worker(int thread_id) {
             // de inmediato a otro thread que sí hace trabajo.
             stats.virtual_time_ns += PIXEL_QUANTUM_NS;
             stats.cache_misses++;
+            logger_.log_stall(cycle, thread_id, x, y, PIXEL_QUANTUM_NS, "slot wasted");
         } else {
             // COMPUTE: renderizar pixel y avanzar al siguiente
             frame[y * IMAGE_WIDTH + x] = scene.trace(make_ray(x, y, camera_pos_));
             stats.virtual_time_ns += PIXEL_QUANTUM_NS;
+            logger_.log_compute(cycle, thread_id, x, y, PIXEL_QUANTUM_NS);
 
             x++;
             if (x >= tile.x_end) { x = tile.x_start; y++; }
             if (y >= tile.y_end) {
+                logger_.log_done(cycle, thread_id);
                 tile_done_[thread_id].store(true, std::memory_order_release);
                 int done = threads_completed_.fetch_add(1, std::memory_order_acq_rel) + 1;
                 if (done == NUM_THREADS) {
@@ -102,6 +124,8 @@ std::vector<Vector3> FinegrainedRenderer::render_frame() {
     reset_thread_stats(thread_stats, cache_models);
     virtual_time_ns_   = 0LL;
     threads_completed_.store(0, std::memory_order_relaxed);
+    global_cycle_.store(0, std::memory_order_relaxed);
+    logger_.log_header("fgmt", NUM_THREADS, 1, PIXEL_QUANTUM_NS, CACHE_MISS_PENALTY_NS);
 
     // Inicializar semáforos: thread 0 parte listo, el resto bloqueado.
     for (int i = 0; i < NUM_THREADS; ++i) {

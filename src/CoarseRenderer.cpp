@@ -95,13 +95,16 @@ void CoarseRenderer::render_worker(int thread_id) {
             stats.cache_misses++;
             stats.virtual_time_ns += CONTEXT_SWITCH_COST_NS;
             switch_to_next_thread();
-            global_clock_++;
+            const int cycle = global_clock_++;
+            const std::string note = "ctx switch→T" + std::to_string(current_thread);
+            logger_.log_stall(cycle, thread_id, x, y, CONTEXT_SWITCH_COST_NS, note.c_str());
         } else {
             // ── COMPUTE ────────────────────────────────────────────────────
             // Renderizar pixel y avanzar al siguiente de este tile
             frame[pixel_idx] = scene.trace(make_ray(x, y, camera_pos_));
             stats.virtual_time_ns += PIXEL_QUANTUM_NS;
-            global_clock_++;
+            const int cycle = global_clock_++;
+            logger_.log_compute(cycle, thread_id, x, y, PIXEL_QUANTUM_NS);
             pixel_idx++;
 
             if (pixel_idx >= task.end) {
@@ -109,6 +112,7 @@ void CoarseRenderer::render_worker(int thread_id) {
                 thread_done[thread_id] = true;
                 threads_finished++;
                 switch_to_next_thread();
+                logger_.log_done(cycle, thread_id);
             }
         }
 
@@ -124,6 +128,7 @@ std::vector<Vector3> CoarseRenderer::render_frame() {
     current_thread   = 0;
     threads_finished = 0;
     global_clock_    = 0;
+    logger_.log_header("cgmt", NUM_THREADS, 1, PIXEL_QUANTUM_NS, CACHE_MISS_PENALTY_NS);
 
     std::vector<std::thread> threads;
     for (int i = 0; i < NUM_THREADS; ++i)

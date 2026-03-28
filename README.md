@@ -1,42 +1,63 @@
-# Framework Experimental de Modelos de Ejecución Multithreading
+# Framework de Modelos de Ejecución Multithreading
 
-Comparación de modelos de ejecución concurrente usando ray tracing como carga de trabajo.
-Cada modelo simula cómo un procesador organiza sus threads y maneja los stalls de memoria.
+Framework experimental en C++17 que compara cinco modelos de ejecución concurrente
+usando ray tracing (80×60 px, 3 esferas, 200 frames de animación) como carga de trabajo
+representativa de una aplicación memory-bound en lazo de datos.
+
+El objetivo es **modelar schedulers de hardware** — no medir el scheduler del SO.
+Cada modelo acumula un reloj virtual (VT) independiente del tiempo real del sistema,
+lo que hace los resultados reproducibles y comparables entre máquinas.
 
 ## Modelos implementados
 
-| Modelo | Scheduler | Rotación | Costo stall | VT |
-|--------|-----------|----------|-------------|----|
-| **Sequential** | 1 hilo | — | `CACHE_MISS_PENALTY_NS = 3200 ns` | suma |
-| **FGMT** | 4 contextos, 1 pipeline | Cada ciclo (obligatoria) | `PIXEL_QUANTUM_NS = 1000 ns` (quantum perdido) | suma |
-| **CGMT** | 4 contextos, 1 pipeline | Solo en stall | 0 ns (stall oculto, CPI ideal = 10.0) | suma |
-| **SMT** | Simulación pura W=2 | Por slot disponible | 0 ns (stall oculto + W=2) | `global_clock × Q` |
-| **CMP** | N=4 OS threads, cores físicos | Paralelo real | `CACHE_MISS_PENALTY_NS` por core (sin ocultar) | `max(VT por core)` |
+| Modelo | Threads hardware | Scheduler | Stall oculto | VT semántica |
+|--------|-----------------|-----------|-------------|--------------|
+| **Sequential** | 1 | — | ✗ paga `CACHE_MISS_PENALTY_NS` completo | suma |
+| **FGMT** | 4 contextos, 1 pipeline | Rota cada ciclo (obligatorio) | Parcial — pierde 1 quantum (`PIXEL_QUANTUM_NS`) | suma |
+| **CGMT** | 4 contextos, 1 pipeline | Rota solo en stall | ✓ stall oculto, paga solo `CONTEXT_SWITCH_COST_NS` | suma |
+| **SMT** | 4 contextos, W=2 issue slots | Simulación pura, sin OS threads | ✓ stall oculto + W=2 simultáneo | `global_clock × Q` |
+| **CMP** | N=4 cores físicos, OS threads reales | Paralelo real | ✗ cada core paga su propio stall | `max(VT por core)` |
 
 ## Estructura del proyecto
 
 ```
 .
-├── src/                        # Implementaciones (.cpp)
-│   ├── main.cpp                # CLI, Factory, GenericRunner, salida de stats
-│   ├── SequentialRenderer.cpp  # Modelo baseline (1 hilo)
-│   ├── FinegrainedRenderer.cpp # Modelo FGMT (semáforos por thread)
-│   ├── CoarseRenderer.cpp      # Modelo CGMT (scheduler round-robin)
-│   ├── SMTRenderer.cpp         # Modelo SMT (simulación pura W=2, sin OS threads)
-│   ├── CMPRenderer.cpp         # Modelo CMP (N=4 cores, OS threads reales)
-│   └── Exporter.cpp            # Guardar PPM e imagen CSV
-├── include/                    # Headers
+├── src/
+│   ├── main.cpp                # CLI: --model, --runs, --verbose, --gif
+│   ├── SequentialRenderer.cpp  # Baseline: 1 hilo, stall completo
+│   ├── FinegrainedRenderer.cpp # FGMT: semáforos, rota cada ciclo
+│   ├── CoarseRenderer.cpp      # CGMT: mutex/condvar, rota solo en stall
+│   ├── SMTRenderer.cpp         # SMT: simulación pura W=2, sin OS threads
+│   ├── CMPRenderer.cpp         # CMP: N=4 OS threads en paralelo real
+│   └── Exporter.cpp            # Guardar PPM y CSV
+├── include/
 │   ├── IRenderer.h             # Interfaz abstracta (polimorfismo)
 │   ├── RendererFactory.h       # Factory con registry map (OCP)
 │   ├── GenericRunner.h         # Orquestador universal de mediciones (DIP)
-│   ├── RendererUtils.h         # Helpers compartidos DRY (reset, sum_vt)
-│   ├── Ray.h                   # Ray + make_ray() compartida (DRY)
+│   ├── RendererUtils.h         # Helpers DRY: reset_thread_stats, sum_virtual_times
+│   ├── Ray.h                   # Ray + make_ray() compartida por todos los renderers
 │   ├── CacheModel.h            # Simulador de cache miss con localidad espacial
-│   ├── Constants.h             # Constantes centralizadas (dimensiones, rutas, VT)
+│   ├── Constants.h             # Todas las constantes: dimensiones, rutas, VT
+│   ├── CameraPath.h            # Órbita elíptica de cámara (200 frames)
 │   └── Metrics.h               # Structs ThreadMetrics / Metrics
-├── scripts/                    # Scripts de medición y análisis
-├── results/                    # CSVs, imágenes PPM, gráficas PNG, log
-├── docs/                       # instructions.md (reglas del proyecto)
+├── scripts/
+│   ├── run_all_models.sh        # Orquestador principal (ver abajo)
+│   ├── analizar_speedup.py      # Speedup, IC95%, eficiencia, escalabilidad + 10 gráficas
+│   ├── run_perf.sh              # perf stat para todos los modelos
+│   ├── perf_to_json.py          # Convierte perf_*.txt → perf_results.json
+│   ├── run_smt_comparison.sh    # CMP con SMT hardware ON vs OFF
+│   ├── run_scalability_matrix.py/sh  # Matriz de escalabilidad N × configuración
+│   ├── make_gif_sequential.sh   # GIF animación sequential
+│   └── make_gif_cmp.sh          # GIF animación CMP
+├── results/
+│   ├── mediciones_*.csv         # 200 mediciones por modelo
+│   ├── image/frame_*.ppm        # Frame de referencia por modelo
+│   ├── graficas/                # 10+ gráficas PNG
+│   └── perf/                    # Salida de perf stat por modelo
+├── docs/
+│   ├── instructions.md          # Reglas del proyecto y especificaciones
+│   └── analisis_tecnico.md      # Análisis teórico vs. observado por modelo
+├── tests/gif_utils/             # Frames PPM intermedios para GIF (generados, no versionar)
 ├── CMakeLists.txt
 └── README.md
 ```
@@ -46,9 +67,8 @@ Cada modelo simula cómo un procesador organiza sus threads y maneja los stalls 
 ### 1. Compilar
 
 ```bash
-mkdir -p build && cd build
-cmake .. && make -j4
-cd ..
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build/ -j4
 ```
 
 ### 2. Ejecutar un modelo
@@ -59,16 +79,16 @@ cd ..
 ./build/raytracer --model cgmt
 ./build/raytracer --model smt
 ./build/raytracer --model cmp
+./build/raytracer --model smt --verbose 30  # log ciclo a ciclo (solo SMT)
 ./build/raytracer --help
 ```
 
-Salida por stdout incluye: tiempo real (avg/min/max/stddev), tiempo virtual (ns),
-stalls promedio, CPI y estadísticas por thread (todos los modelos paralelos).
+La stdout incluye: tiempo real (avg/min/max/σ), tiempo virtual promedio (ns/ms),
+stalls promedio, CPI y estadísticas por thread (modelos paralelos).
 
 ### 3. Ejecutar todos los modelos y generar análisis completo
 
 ```bash
-# Compila, ejecuta los 5 modelos, valida imágenes y genera gráficas
 ./scripts/run_all_models.sh
 ./scripts/run_all_models.sh --skip-fgmt            # omitir FGMT (~100s)
 ./scripts/run_all_models.sh --skip-fgmt --with-perf  # incluir perf stat
@@ -77,103 +97,103 @@ stalls promedio, CPI y estadísticas por thread (todos los modelos paralelos).
 Flags disponibles: `--skip-fgmt`, `--skip-smt`, `--skip-cmp`, `--with-perf`.
 
 Genera en `results/`:
-- `mediciones_*.csv` — 200 mediciones por modelo
-- `speedup_report.log` — speedup, eficiencia paralela, escalabilidad, CPI, stalls
-- `graficas/` — 10 gráficas PNG comparativas (ver tabla abajo)
-- `image/` — `frame_*.ppm` de cada modelo (deben ser byte-exactas)
 
-| Gráfica | Descripción |
-|---------|-------------|
-| `01_histogram_comparativo.png` | Histograma de VT por frame, eje X compartido |
-| `02_boxplot_comparativo.png` | Boxplot VT — todos los modelos |
-| `03_speedup_comparison.png` | Speed Up VT vs Sequential |
-| `04_timeline_executions.png` | VT por frame (animación 200 frames) |
-| `05_virtual_time_comparison.png` | VT promedio: escala completa + overhead |
-| `06_cpu_speedup_smt_cmp.png` | Speed Up CPU wall-clock — SMT y CMP |
-| `07_efficiency.png` | **Eficiencia paralela** E = S/N por modelo |
-| `08_scalability.png` | **Escalabilidad**: N vs Speedup real vs ideal |
-| `09_modeled_group_comparison.png` | **Grupo simulado**: seq vs fgmt vs cgmt (VT) |
-| `10_real_group_comparison.png` | **Grupo real**: seq vs smt vs cmp (CPU) |
+| Artefacto | Descripción |
+|-----------|-------------|
+| `mediciones_*.csv` | 200 mediciones por modelo (frames de animación) |
+| `speedup_report.log` | Speedup, IC95%, eficiencia paralela, escalabilidad, CPI |
+| `image/frame_*.ppm` | Frame de referencia por modelo (deben ser byte-exactas) |
+| `graficas/01_histogram_comparativo.png` | Histograma de VT por frame, eje X compartido |
+| `graficas/02_boxplot_comparativo.png` | Boxplot VT — todos los modelos |
+| `graficas/03_speedup_comparison.png` | Speed Up VT vs Sequential con IC95% |
+| `graficas/04_timeline_executions.png` | VT por frame (animación 200 frames) |
+| `graficas/05_virtual_time_comparison.png` | VT promedio: escala completa |
+| `graficas/06_cpu_speedup_smt_cmp.png` | Speed Up CPU wall-clock — SMT y CMP |
+| `graficas/07_efficiency.png` | Eficiencia paralela E = S/N por modelo |
+| `graficas/08_scalability.png` | Escalabilidad: N vs Speedup real vs ideal (Amdahl) |
+| `graficas/09_modeled_group_comparison.png` | Grupo simulado: seq vs fgmt vs cgmt (VT) |
+| `graficas/10_real_group_comparison.png` | Grupo real: seq vs smt vs cmp (CPU time) |
 
-### 4. Ejecutar un solo modelo con script individual
-
-```bash
-./scripts/run_mediciones_secuencial.sh   # sequential, genera gráfica propia
-./scripts/run_mediciones_fgmt.sh         # fgmt vs sequential
-./scripts/run_mediciones_cgmt.sh         # sequential + fgmt + cgmt
-./scripts/run_mediciones_cmp.sh          # cmp vs sequential
-```
-
-### 5. Generar GIF de animación
+### 4. Generar GIF de animación
 
 ```bash
-./scripts/make_gif_sequential.sh   # GIF del modelo sequential
-./scripts/make_gif_cmp.sh          # GIF del modelo CMP
+./scripts/make_gif_sequential.sh   # GIF orbital del modelo sequential
+./scripts/make_gif_cmp.sh          # GIF orbital del modelo CMP
 ```
 
-### 6. Comparativa SMT ON vs OFF (hardware real)
+Ambos scripts generan los 200 frames PPM si no existen y ensamblan el GIF
+usando FFmpeg (o Pillow como fallback).
+
+### 5. Comparativa SMT ON vs OFF (hardware físico)
 
 Mide el modelo CMP con Hyper-Threading activado y desactivado para cuantificar
 el efecto del SMT hardware en el rendimiento real. Requiere `sudo`.
 
 ```bash
 ./scripts/run_smt_comparison.sh
-# Controlar manualmente:
-echo off | sudo tee /sys/devices/system/cpu/smt/control   # desactivar
-echo on  | sudo tee /sys/devices/system/cpu/smt/control   # activar
-cat /sys/devices/system/cpu/smt/control                   # ver estado
+
+# Control manual:
+echo off | sudo tee /sys/devices/system/cpu/smt/control   # desactivar HT
+echo on  | sudo tee /sys/devices/system/cpu/smt/control   # activar HT
+cat /sys/devices/system/cpu/smt/control                   # estado actual
 ```
 
-Guarda `results/mediciones_cmp_smt_on.csv`, `mediciones_cmp_smt_off.csv` y
-la gráfica `results/graficas/11_smt_on_vs_off.png`.
+### 6. Perfilado con `perf stat`
 
-### 7. Perfilado con `perf stat`
-
-Captura contadores de hardware (cycles, instructions, cache-misses, branches)
-y software (task-clock, context-switches) para cualquier modelo.
-Referencia: <https://perfwiki.github.io/main/>
+Captura contadores de hardware (cycles, instructions, cache-misses, branch-misses)
+para correlacionar con los modelos de ejecución.
 
 ```bash
-./scripts/run_perf.sh                        # todos los modelos
-./scripts/run_perf.sh sequential cmp smt     # modelos específicos
+sudo ./enable_perf.sh enable            # bajar perf_event_paranoid
+./scripts/run_perf.sh                   # todos los modelos
+./scripts/run_perf.sh sequential cmp    # modelos específicos
+sudo ./enable_perf.sh disable           # restaurar
 ```
 
-Guarda los resultados en `results/perf/perf_<modelo>.txt`. Las métricas de CPI,
-IPC y tasa de cache-miss permiten correlacionar con los modelos de ejecución.
+Guarda `results/perf/perf_<modelo>.txt` y genera `results/perf/perf_results.json`
+con métricas estructuradas (CPI hardware, IPC, cache-miss rate, branch-miss rate).
 
-## Reloj virtual
+## Reloj virtual (VT)
 
-Cada modelo acumula tiempo virtual (ns) para modelar la carga sobre el pipeline,
-independientemente del tiempo real del SO.
+Cada modelo acumula un reloj virtual independiente del planificador del SO,
+modelando el tiempo que tardaría el pipeline de hardware en completar el frame.
 
-| Constante | Valor | Descripción |
-|-----------|-------|-------------|
-| `PIXEL_QUANTUM_NS` | 1000 ns | 1 slot de pipeline por pixel |
-| `NOP_PENALTY_NS` | 100 ns | 1 ciclo base (usado en `CACHE_MISS_PENALTY_NS`) |
-| `CACHE_MISS_PENALTY_NS` | 3200 ns | Stall completo = 32 NOPs (Sequential y CMP por core) |
-| `CACHE_SIZE` | 256 B | Miss rate ~25% → ~409 stalls/frame (diferencias visibles) |
+| Constante | Valor | Quién la paga |
+|-----------|-------|---------------|
+| `PIXEL_QUANTUM_NS` | 1 000 ns | Todos los modelos (1 slot de pipeline) |
+| `NOP_PENALTY_NS` | 100 ns | Base de `CACHE_MISS_PENALTY_NS` |
+| `CACHE_MISS_PENALTY_NS` | 3 200 ns | Sequential y CMP por core (stall completo) |
+| `CONTEXT_SWITCH_COST_NS` | 400 ns | CGMT al cambiar de contexto en stall |
+| `CACHE_SIZE` | 256 B | Miss rate ~25% → ~1 200 stalls/frame |
 | `CMP_NUM_CORES` | 4 | Núcleos independientes en CMP |
+| `SMT_ISSUE_WIDTH` | 2 | Slots simultáneos por ciclo en SMT |
 
-**CPI reportado**: `virtual_time_ns / (PIXEL_QUANTUM_NS × total_pixels)`. CPI ideal CGMT = 10.0.
+**CPI reportado**: `VT / (PIXEL_QUANTUM_NS × total_pixels)`.  
+CPI ideal CGMT = 10.0 (stalls completamente ocultos, solo paga `CONTEXT_SWITCH_COST_NS`).
 
-**Resultados de referencia** (200 frames, CACHE_SIZE=256, medición en WSL2 — valores en HW físico diferirán):
+**Semántica de VT por modelo:**
+- **Sequential / FGMT / CGMT** — VT = **suma** de tiempos de todos los threads (pipeline compartido, ejecución serial intercalada).
+- **SMT** — VT = `global_clock × PIXEL_QUANTUM_NS` (reloj de pared de la simulación; con W=2 el pipeline completa ~2 px/ciclo).
+- **CMP** — VT = `max(VT_core_i)` (los cores avanzan en paralelo real; el reloj de pared avanza al ritmo del más lento).
 
-| Modelo | Métrica | VT prom | SpeedUp VT | Eficiencia (E=S/N) | CPI |
-|------------|---------|-------------|---------|---------------------|-----|
-| Sequential | VT | 6.110 ms | 1.00× | 1.000 (baseline) | 12.73 |
-| FGMT | VT | 5.215 ms | 1.17× | 0.293 (N=4) | 10.87 |
-| CGMT | VT | 4.800 ms | 1.27× | 0.318 (N=4) | 10.00 |
-| SMT | VT\* | 2.436 ms | 2.51× | — | 5.07 |
-| CMP | VT\* | 1.547 ms | 3.95× | 0.988 (N=4) | 3.22 |
+**Resultados de referencia** (200 frames, CACHE_SIZE=256, medición WSL2 — hardware físico diferirá):
 
-\* SMT VT = `global_clock × PIXEL_QUANTUM_NS` (reloj del pipeline W=2).
-  CMP VT = `max(VT_core_i)` (core más lento de N=4).
-  SpeedUp calculado sobre VT vs Sequential. Ver [docs/analisis_tecnico.md](docs/analisis_tecnico.md) para el análisis completo.
+| Modelo | VT prom | SpeedUp VT | Eficiencia E=S/N | CPI |
+|--------|---------|-----------|-----------------|-----|
+| Sequential | 6.110 ms | 1.00× | 1.000 (baseline) | 12.73 |
+| FGMT | 5.215 ms | 1.17× | 0.293 (N=4) | 10.87 |
+| CGMT | 4.800 ms | 1.27× | 0.318 (N=4) | 10.00 |
+| SMT | 2.436 ms | 2.51× | — | 5.07 |
+| CMP | 1.547 ms | 3.95× | 0.988 (N=4) | 3.22 |
 
-## Arquitectura de software
+Ver [docs/analisis_tecnico.md](docs/analisis_tecnico.md) para el análisis teórico vs. observado completo.
 
-- **SOLID** — `RendererFactory` usa registry map (OCP); `GenericRunner` depende de `IRenderer` (DIP); `switch_to_next_thread()` extrae responsabilidad del scheduler (SRP).
-- **DRY** — `make_ray()` en `Ray.h` compartida por todos los renderers; `reset_thread_stats()` en `RendererUtils.h`; rutas de archivos resueltas una sola vez en `Exporter`.
+## Arquitectura de software (SOLID + DRY)
+
+- **OCP** — `RendererFactory` usa un `unordered_map` como registry. Agregar un modelo nuevo no toca ningún archivo existente.
+- **DIP** — `GenericRunner` y `main.cpp` dependen únicamente de `IRenderer*`; nunca de concretos.
+- **SRP** — `switch_to_next_thread()` (CGMT) extrae la lógica del scheduler en su propio método; `Exporter` es responsable exclusivo de rutas y E/S.
+- **DRY** — `make_ray()` en `Ray.h` compartida por todos los renderers. `reset_thread_stats()` y `sum_virtual_times()` en `RendererUtils.h` eliminan duplicación entre FGMT, CGMT y CMP.
 
 ## Cómo agregar un nuevo modelo
 
@@ -182,72 +202,27 @@ independientemente del tiempo real del SO.
    ```cpp
    {"mimodelo", [] { return std::make_unique<MiRenderer>(); }},
    ```
-3. Agregar las rutas en `Constants.h` (`IMAGE_FILE_*`, `CSV_FILE_*`).
-4. Agregar el source en `CMakeLists.txt`.
+3. Agregar las rutas de salida en `Constants.h` (`IMAGE_FILE_MIMODELO`, `CSV_FILE_MIMODELO`).
+4. Agregar el `.cpp` en `CMakeLists.txt`.
 
 No es necesario modificar `main.cpp`, `GenericRunner`, `Exporter` ni ningún otro archivo.
 
-    std::string get_model_name() const override { return "yourmodel"; }
-};
-```
-
-2. Actualizar `RendererFactory::create()`:
-```cpp
-if (model_name == "yourmodel") {
-    return std::make_unique<YourRenderer>();
-}
-```
-
-3. Compilar y ejecutar:
-```bash
-./build/raytracer --model yourmodel --runs 200
-```
-
-## Documentación y reglas del proyecto
-
-Lee `docs/instructions.md` para:
-- Reglas obligatorias (200+ mediciones, validación, etc.)
-- Observaciones específicas por modelo
-- Cómo modelar stalls, clocks, quanta
-- Requisitos de validación
-
-Lee `docs/analisis_tecnico.md` para:
-- Análisis teórico vs. resultados observados por modelo
-- Ley de Amdahl aplicada (CMP eficiencia ≈ 98.8%)
-- Ocultamiento de latencia FGMT/CGMT
-- Limitaciones del entorno WSL2 y plan para hardware físico
-
-Lee `docs/rubrica_analisis.md` para:
-- Estado actual vs. rúbrica de evaluación
-- Plan de acción priorizado para la entrega
-
 ## Requisitos
 
-- C++17 compatible compiler (GCC 7+, Clang 5+)
+- Compilador C++17 (GCC 7+ / Clang 5+)
 - CMake 3.10+
-- POSIX threads (pthread)
-- Python 3 + pandas/matplotlib (para gráficas)
+- POSIX `pthread` + `semaphore.h`
+- Python 3 con `pandas` y `matplotlib` (para análisis y gráficas)
+- `perf` de Linux (opcional, para contadores de hardware)
 
-## Git workflow
+## Documentación
 
-```bash
-# Ver rama actual
-git branch
+| Archivo | Contenido |
+|---------|-----------|
+| [docs/instructions.md](docs/instructions.md) | Reglas del proyecto: modelos obligatorios, métricas, validación |
+| [docs/analisis_tecnico.md](docs/analisis_tecnico.md) | Análisis teórico vs. observado, Ley de Amdahl, limitaciones WSL2 |
 
-# Cambiar a rama (p. ej. desarrollo de CGMT)
-git checkout -b cgmt
+## Contacto
 
-# Commits incrementales
-git add file.h file.cpp
-git commit -m "type(component): descripción corta"
-
-# Mergear a develop cuando esté completo
-git checkout develop
-git merge cgmt
-```
-
-## Contacto y créditos
-
-Proyecto para curso CE4302 - Arquitectura de Computadores II.
-Semestre I, 2026.
+Proyecto CE4302 — Arquitectura de Computadores II, Semestre I 2026.
 

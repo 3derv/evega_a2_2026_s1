@@ -7,6 +7,7 @@
 #include "Metrics.h"
 #include "Ray.h"
 #include "Constants.h"
+#include "SchedulerLogger.h"
 #include <vector>
 #include <thread>
 #include <atomic>
@@ -58,40 +59,37 @@ private:
     sem_t                    slots_[constants::NUM_THREADS];
     std::atomic<int>         threads_completed_{0};
     std::atomic<bool>        tile_done_[constants::NUM_THREADS];
+    // global_cycle_: cuenta cuántos slots de pipeline se han despachado.
+    // Incrementado atómicamente por el thread activo al tomar el semáforo.
+    // Serializado de facto por el protocolo de semáforos (un thread activo).
+    std::atomic<int>         global_cycle_{0};
+    SchedulerLogger          logger_;   // Traza ciclo-a-ciclo (activar con set_verbose)
 
     void render_tile_worker(int thread_id);
 
 public:
-    // Constructor: inicializar renderer, crear tiles (2x2), cache models por thread
-    // Divide el frame en 4 tiles iguales (NUM_THREADS=4), uno por thread
-    // Inicializa CacheModel para cada thread con parámetros de Constants.h
+    // Constructor: divide el frame en 4 tiles 2×2 (uno por thread) e inicializa
+    // los CacheModel con semillas deterministas (base 42 + thread_id).
     FinegrainedRenderer();
 
     // Actualiza la posición de cámara antes de render_frame().
     // GenericRunner la llama una vez por frame; el scheduler FGMT no cambia.
     void set_camera_pos(const Vector3& pos) override { camera_pos_ = pos; }
 
-    // render_frame(): Implementación de IRenderer. Renderiza frame con 4 threads paralelos.
-    // Responsabilidad:
-    //   1. Resetear cache models y estadísticas de threads
-    //   2. Crear 4 threads (uno por tile)
-    //   3. Cada thread procesa su tile con cache modeling y NOPs
-    //   4. Sincronizar (join) al finalizar todos los threads
-    //   5. Retornar frame buffer con píxeles finales
-    // Return: Vector<Vector3> con dimensiones IMAGE_WIDTH × IMAGE_HEIGHT
+    // Habilita la traza del scheduler para los primeros `cycles` ciclos de pipeline.
+    void set_verbose(int cycles) override { logger_.set_max_cycles(cycles); }
+
+    // render_frame(): resetea estado, lanza NUM_THREADS threads (uno por tile) y
+    // espera a que todos terminen. VT = suma de VTs por thread (pipeline compartido).
     std::vector<Vector3> render_frame() override;
 
-    // get_model_name(): Retorna identificador del modelo para logging/CSV
-    // Return: String "fgmt"
+    // get_model_name(): identifica el modelo para logging/CSV
     std::string get_model_name() const override { return "fgmt"; }
 
-    // get_thread_metrics(): Obtener estadísticas de threads de la última ejecución
-    // Incluye: nops_count, nop_time_ns, cache_misses por cada thread
-    // Return: Vector<ThreadMetrics> con una entrada por thread
-    const std::vector<trace::ThreadMetrics>& get_thread_metrics() const { return thread_stats; }
+    // get_thread_metrics(): estadísticas (misses, VT) de los 4 threads del último frame.
+    const std::vector<trace::ThreadMetrics>& get_thread_metrics() const override { return thread_stats; }
 
-    // get_frame(): Acceder al frame procesado (para debugging o exportación manual)
-    // Return: Vector<Vector3> con píxeles completamente renderizados
+    // get_frame(): frame procesado (para debugging o exportación manual)
     const std::vector<Vector3>& get_frame() const { return frame; }
     long long get_virtual_time_ns() const override { return virtual_time_ns_; }
     int get_total_stalls() const override {

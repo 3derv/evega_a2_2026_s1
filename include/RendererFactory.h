@@ -55,7 +55,7 @@ public:
             throw std::runtime_error(dev_it->second);
 
         throw std::invalid_argument(
-            "Unknown model: " + model_name + ". Available: sequential, fgmt, cgmt, smt");
+            "Unknown model: " + model_name + ". Available: sequential, fgmt, cgmt, smt, cmp");
     }
 
     // Retorna true si el modelo está disponible (no en desarrollo).
@@ -66,8 +66,7 @@ public:
     // Retorna mensaje de ayuda con modelos disponibles.
     static std::string get_help_message() {
         return "Usage: ./raytracer [--model MODEL] [--runs N] [--verbose N]\n"
-               "Models available: sequential, fgmt, cgmt, smt\n"
-               "Models in development: cmp\n"
+               "Models available: sequential, fgmt, cgmt, smt, cmp\n"
                "Options:\n"
                "  --verbose N   Imprimir los primeros N ciclos del scheduler (solo SMT)\n"
                "Example: ./raytracer --model smt --runs 1 --verbose 30\n";

@@ -42,6 +42,11 @@ public:
     // Implementación por defecto no-op: modelos que aún no soporten animación
     // de cámara simplemente ignoran esta llamada.
     virtual void set_camera_pos(const Vector3& /*pos*/) {}
+
+    // Habilita la traza ciclo-a-ciclo del scheduler para los primeros `cycles` ciclos.
+    // Implementación por defecto no-op; cada modelo sobreescribe con su SchedulerLogger.
+    // Uso: ./build/raytracer --model <modelo> --verbose N --runs 1
+    virtual void set_verbose(int /*cycles*/) {}
 };
 
 #endif // IRENDERER_H

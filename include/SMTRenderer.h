@@ -7,6 +7,7 @@
 #include "Metrics.h"
 #include "Ray.h"
 #include "Constants.h"
+#include "SchedulerLogger.h"
 #include <vector>
 
 // SMTRenderer: Renderizador SMT (Simultaneous Multithreading) — modelo por píxel.
@@ -42,7 +43,7 @@ public:
     SMTRenderer();
 
     // Habilitar logging ciclo a ciclo. cycles = número de ciclos a imprimir (0 = off).
-    void set_verbose(int cycles) { verbose_cycles_ = cycles; }
+    void set_verbose(int cycles) override { logger_.set_max_cycles(cycles); }
 
     // Actualiza la posición de cámara antes de render_frame().
     // GenericRunner la llama una vez por frame; el scheduler SMT no cambia.
@@ -83,7 +84,7 @@ private:
     std::vector<int>  stall_countdown_; // ciclos restantes de stall (0 = listo)
     std::vector<bool> thread_finished_; // tile completado
 
-    int verbose_cycles_ = 0; // 0 = off; N = imprimir primeros N ciclos
+    SchedulerLogger logger_; // Traza ciclo-a-ciclo (activar con set_verbose)
 };
 
 #endif // SMT_RENDERER_H

@@ -6,6 +6,7 @@
 #include "CacheModel.h"
 #include "Metrics.h"
 #include "Ray.h"
+#include "SchedulerLogger.h"
 #include <vector>
 #include <thread>
 #include <mutex>
@@ -50,6 +51,7 @@ private:
     std::vector<bool> thread_done;     // true si el thread completó su tile
     int threads_finished;              // Conteo de threads terminados (bajo mutex)
     int global_clock_;                 // Ciclos totales de hardware simulados
+    SchedulerLogger logger_;           // Traza ciclo-a-ciclo (activar con set_verbose)
 
     long long virtual_time_ns_ = 0LL;
 
@@ -69,6 +71,9 @@ public:
     // Actualiza la posición de cámara antes de render_frame().
     // GenericRunner la llama una vez por frame; el scheduler CGMT no cambia.
     void set_camera_pos(const Vector3& pos) override { camera_pos_ = pos; }
+
+    // Habilita la traza del scheduler para los primeros `cycles` ciclos de pipeline.
+    void set_verbose(int cycles) override { logger_.set_max_cycles(cycles); }
 
     std::vector<Vector3> render_frame() override;
     std::string get_model_name() const override { return "cgmt"; }

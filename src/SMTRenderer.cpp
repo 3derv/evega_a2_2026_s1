@@ -2,7 +2,6 @@
 #include "Constants.h"
 #include "Ray.h"
 #include "RendererUtils.h"
-#include <iomanip>
 #include <limits>
 
 using namespace constants;
@@ -75,12 +74,8 @@ std::vector<Vector3> SMTRenderer::render_frame() {
     }
     global_clock_ = 0;
 
-    if (verbose_cycles_ > 0) {
-        std::cout << "\n[SMT] issue_width=" << SMT_ISSUE_WIDTH
-                  << "  threads=" << SMT_NUM_THREADS
-                  << "  pixel_quantum=" << PIXEL_QUANTUM_NS << "ns\n"
-                  << std::string(72, '-') << "\n";
-    }
+    logger_.log_header("smt", SMT_NUM_THREADS, SMT_ISSUE_WIDTH,
+                      PIXEL_QUANTUM_NS, CACHE_MISS_PENALTY_NS);
 
     // rr: puntero round-robin — de dónde empezamos a escanear en el próximo ciclo.
     // Se avanza al (último thread que llenó un slot + 1) para equilibrar la carga.
@@ -115,13 +110,17 @@ std::vector<Vector3> SMTRenderer::render_frame() {
                 // El stall queda oculto: 0 VT desperdiciado por este hilo.
                 thread_stats_[tid].cache_misses++;
                 stall_countdown_[tid] = CACHE_MISS_PENALTY_NS / PIXEL_QUANTUM_NS;
+                logger_.log_stall(global_clock_, tid, x, y, 0LL, "miss\u2192ejected");
             } else {
                 // HIT: slot ocupado productivamente.
                 frame_[px] = render_pixel(scene_, x, y, camera_pos_);
                 thread_stats_[tid].virtual_time_ns += PIXEL_QUANTUM_NS;
+                logger_.log_compute(global_clock_, tid, x, y, PIXEL_QUANTUM_NS);
                 pixel_idx_[tid]++;
-                if (pixel_idx_[tid] >= tasks_[tid].end)
+                if (pixel_idx_[tid] >= tasks_[tid].end) {
                     thread_finished_[tid] = true;
+                    logger_.log_done(global_clock_, tid);
+                }
                 ++slots_filled;
                 rr = (tid + 1) % SMT_NUM_THREADS; // avanzar round-robin
             }
@@ -132,18 +131,6 @@ std::vector<Vector3> SMTRenderer::render_frame() {
         for (int i = 0; i < SMT_NUM_THREADS; ++i)
             if (!thread_finished_[i] && stall_countdown_[i] > 0)
                 --stall_countdown_[i];
-
-        // ── LOGGING VERBOSE ───────────────────────────────────────────────
-        if (verbose_cycles_ > 0 && global_clock_ < verbose_cycles_) {
-            std::cout << "[C" << std::setw(4) << global_clock_ << "] slots=" << slots_filled << " ";
-            for (int i = 0; i < SMT_NUM_THREADS; ++i) {
-                std::cout << " T" << i << ":";
-                if      (thread_finished_[i])       std::cout << "DONE";
-                else if (stall_countdown_[i] > 0)   std::cout << "STALL(" << stall_countdown_[i] << ")";
-                else                                 std::cout << "p=" << pixel_idx_[i];
-            }
-            std::cout << "\n";
-        }
 
         ++global_clock_;
     }
