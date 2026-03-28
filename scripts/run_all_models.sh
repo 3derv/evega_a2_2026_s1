@@ -14,6 +14,24 @@
 #
 # Cada modelo = 1 ejecución = 200 frames de animación (NUM_FRAMES en Constants.h).
 # Timeouts: sequential=60s, cgmt=120s, fgmt=360s, smt=600s, cmp=120s.
+#
+# ───────────────────────────────────────────────────────────────────────
+# TRAZA DEL SCHEDULER (--verbose N, solo para desarrollo/debug)
+# ───────────────────────────────────────────────────────────────────────
+# Disponible en todos los modelos. Muestra por cada ciclo: thread_id,
+# tipo de evento (COMPUTE / STALL / DONE), coordenadas (x,y) y coste VT.
+#
+#   ./build/raytracer --model sequential --verbose 20 --runs 1
+#   ./build/raytracer --model fgmt       --verbose 20 --runs 1
+#   ./build/raytracer --model cgmt       --verbose 20 --runs 1
+#   ./build/raytracer --model smt        --verbose 20 --runs 1
+#   ./build/raytracer --model cmp        --verbose 20 --runs 1
+#
+# Ejemplo de salida (cgmt, T0 stall + T1 compute):
+#   [C    3] T0 STALL   px=(  1, 0)  +  400ns  (ctx switch→T1)
+#   [C    4] T1 COMPUTE px=(1201, 0) + 1000ns
+#
+# NOTA: No usar --verbose en mediciones reales (altera el timing).
 set -euo pipefail
 
 SKIP_FGMT=false

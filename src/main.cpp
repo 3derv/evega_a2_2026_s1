@@ -1,14 +1,13 @@
 #include "Constants.h"
 #include "GenericRunner.h"
 #include "RendererFactory.h"
-#include "SMTRenderer.h"
 #include <iostream>
 #include <string>
 #include <stdexcept>
 
 int main(int argc, char* argv[]) {
     int num_runs  = 1;
-    int verbose   = 0;    // ciclos a imprimir con --verbose N (solo SMT)
+    int verbose   = 0;    // ciclos del scheduler a trazar con --verbose N (todos los modelos)
     std::string model = "sequential";  // Modelo por defecto
     bool save_gif_frames = false;      // --gif: guardar frames intermedios en GIF_FRAMES_DIR
     
@@ -34,13 +33,9 @@ int main(int argc, char* argv[]) {
         auto renderer = RendererFactory::create(model);
         std::string model_name = renderer->get_model_name();
 
-        // Activar verbose si se pidió y el modelo es SMT
-        if (verbose > 0) {
-            if (auto* smt = dynamic_cast<SMTRenderer*>(renderer.get()))
-                smt->set_verbose(verbose);
-            else
-                std::cerr << "Advertencia: --verbose solo tiene efecto con --model smt\n";
-        }
+        // Activar verbose del scheduler si se pidió (funciona en todos los modelos)
+        if (verbose > 0)
+            renderer->set_verbose(verbose);
         
         // Ejecutar mediciones
         trace::GenericRunner runner(std::move(renderer), num_runs, model);
