@@ -22,7 +22,7 @@ mono_crash.*
 # Proyecto específico
 *.txt
 build/
-
+docs/
 # Frames intermedios para GIF (generados, no versionar)
 tests/gif_utils/
 

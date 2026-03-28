@@ -113,9 +113,20 @@ inline const long long PIXEL_QUANTUM_NS       = 1000LL;
 // Penalizacion completa de un stall: NOPS_PER_STALL x NOP_PENALTY_NS = 3200 ns
 // Solo Sequential paga este valor integro (ningun otro thread puede ejecutar).
 // FGMT paga PIXEL_QUANTUM_NS (el slot se gasta en un NOP, sin avanzar el pixel).
-// CGMT paga 0 ns (cambia de contexto inmediatamente, el slot lo llena otro thread).
+// CGMT paga CONTEXT_SWITCH_COST_NS (overhead de cambio de contexto hardware).
 // SMT  paga 0 ns (el slot lo llena otro thread del mismo ciclo de emision).
 inline const long long CACHE_MISS_PENALTY_NS  = static_cast<long long>(NOPS_PER_STALL) * NOP_PENALTY_NS;
+
+// ============================================================================
+// PARÁMETROS DE CONTEXT SWITCH (CGMT)
+// ============================================================================
+
+// Costo de cambiar de contexto en CGMT: tiempo para guardar/restaurar estado
+// Típicamente ~50-500 ns en hardware moderno. Usamos 400 ns como estimación.
+// Se paga en CGMT cuando hay un stall y el scheduler cambia de thread.
+// El stall mismo NO se paga (queda oculto por el otro thread ejecutando),
+// pero el cambio de contexto tiene overhead que sí contribuye al VT.
+inline const long long CONTEXT_SWITCH_COST_NS = 400LL;
 
 // ============================================================================
 // PARÁMETROS DE SMT (Simultaneous Multithreading)

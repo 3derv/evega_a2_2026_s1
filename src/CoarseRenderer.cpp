@@ -82,14 +82,18 @@ void CoarseRenderer::render_worker(int thread_id) {
         int y = pixel_idx / IMAGE_WIDTH;
 
         if (cache.is_cache_miss(x, y)) {
-            // ── STALL DETECTADO → CAMBIO DE CONTEXTO INMEDIATO ────────────
+            // ── STALL DETECTADO → CAMBIO DE CONTEXTO CON COSTO ────────────
             // CGMT prevé el stall y cede el slot al siguiente thread activo
-            // ANTES de desperdiciar ningún ciclo. Otro thread llena el slot
-            // con trabajo real → el stall queda completamente oculto.
-            // Costo para este thread: 0 ns de VT (ningún ciclo desperdiciado).
+            // ANTES de desperdiciar el ciclo de latencia (CACHE_MISS_PENALTY_NS).
+            // El stall queda completamente oculto porque otro thread ejecuta.
+            // Pero el cambio de contexto en hardware tiene overhead:
+            //   - Guardar registros, TLB, predictor de ramas, etc.
+            //   - Típicamente ~400 ns en CPU moderna.
+            // Costo para este thread: CONTEXT_SWITCH_COST_NS (hay overhead).
             // El thread retomará el control cuando le toque de nuevo y
             // reintentará el mismo píxel (puede que ya esté en cache).
             stats.cache_misses++;
+            stats.virtual_time_ns += CONTEXT_SWITCH_COST_NS;
             switch_to_next_thread();
             global_clock_++;
         } else {
