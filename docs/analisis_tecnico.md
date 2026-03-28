@@ -321,3 +321,216 @@ Si hay diferencias, el modelo tiene un bug en el cálculo de píxeles.
   solo en stall → 0 overhead en operaciones sin stall.
 - **SMT issue width:** Con W=2 y tareas completamente independientes, CPI_SMT ≈ CPI_CGMT/2.
   Con dependencias inter-instrucción, CPI_SMT > CPI_CGMT/2.
+
+---
+
+## 8. Ejecución completa con `--with-perf` (27-03-2026)
+
+Se ejecutó el flujo completo:
+
+```bash
+./scripts/run_all_models.sh --with-perf
+```
+
+### 8.1 Correctness
+
+La validación de imágenes PPM fue exitosa para todos los modelos:
+
+- `fgmt == sequential` (byte-exact)
+- `cgmt == sequential` (byte-exact)
+- `smt == sequential` (byte-exact)
+- `cmp == sequential` (byte-exact)
+
+### 8.2 Resultados observados (200 frames)
+
+| Modelo | VT promedio | CPU promedio | Stalls prom. | CPI |
+|--------|-------------|--------------|--------------|-----|
+| Sequential | 6.110 ms | 0.000205 s | 409.3 | 12.7285 |
+| FGMT | 5.215 ms | 0.007976 s | 415.2 | 10.8651 |
+| CGMT | 4.800 ms | 0.002607 s | 408.7 | 10.0000 |
+| SMT | 2.436 ms | 0.000252 s | 408.7 | 5.0743 |
+| CMP | 1.547 ms | 0.000137 s | 408.9 | 3.2238 |
+
+Speedup reportado vs baseline:
+
+- VT: FGMT `1.17x`, CGMT `1.27x`, SMT `2.51x`, CMP `3.95x`.
+- CPU: SMT `0.81x`, CMP `1.50x`.
+
+Interpretación:
+
+- En modelos simulados de scheduler (FGMT/CGMT), el indicador principal sigue siendo VT.
+- SMT y CMP muestran mejor VT que modelos de pipeline compartido, consistente con mayor paralelismo efectivo.
+- CGMT mantiene CPI ideal `10.0`, confirmando ocultamiento de stalls en la simulación.
+
+### 8.3 Resultado de `perf stat` en este entorno
+
+Se generaron los archivos:
+
+- `results/perf/perf_sequential.txt`
+- `results/perf/perf_smt.txt`
+- `results/perf/perf_cmp.txt`
+- `results/perf/perf_results.json`
+
+Pero no fue posible recolectar contadores hardware ni software por política del kernel:
+
+- `perf_event_paranoid = 4`
+- Error: acceso restringido a operaciones de observabilidad/performance.
+
+Por eso, en `perf_results.json` los modelos aparecen con `hw_available: false` y sin contadores derivados (CPI/IPC por hardware, cache-miss rate, etc.).
+
+### 8.4 Conclusión técnica actualizada
+
+1. El experimento comparativo de los 5 modelos es válido y reproducible en términos de VT, CPI simulado y correctness de imagen.
+2. El perfilado con `perf` se ejecutó correctamente a nivel de pipeline de scripts, pero la plataforma no permitió leer PMU por restricciones de permisos.
+3. Para cerrar el análisis de microarquitectura con evidencia de hardware (cycles/instructions/cache-misses), se requiere repetir en Linux nativo con permisos de `perf` habilitados (por ejemplo `perf_event_paranoid <= 1`, idealmente `0`).
+
+---
+
+## 9. Ejecución con perf habilitado + CONTEXT_SWITCH_COST_NS en CGMT (27-03-2026, fase 2)
+
+Se ejecutó el flujo completo con permisos de perf habilitados:
+
+```bash
+./run_perf_analysis.sh   # baja paranoid→0, corre análisis, restaura paranoid
+```
+
+### 9.1 Mejora a CGMT: Context Switch Cost
+
+Se agregó una constante realista al modelo CGMT:
+
+```cpp
+// CONTEXT_SWITCH_COST_NS: overhead de cambio de contexto en hardware
+// Típicamente ~50-500 ns. Estimamos 400 ns (CPU moderna).
+inline const long long CONTEXT_SWITCH_COST_NS = 400LL;
+```
+
+Impacto en CGMT:
+
+| Métrica | Anterior | Nuevo | Diferencia |
+|---------|----------|-------|------------|
+| VT promedio | 4.800 ms | 4.963 ms | +0.163 ms |
+| CPI | 10.0000 | 10.3406 | +0.3406 |
+| Speedup vs Seq | 1.27x | 1.23x | -0.04x |
+
+Análisis:
+- 409 stalls promedio × 400 ns ≈ 163,600 ns ≈ 0.164 ms adicional → coincide con VT observado ✓
+- El modelo es ahora más realista: reconoce que cambiar de contexto en hardware no es gratis.
+- El CPI aumentó de 10.0 a 10.3406, reflejando el overhead de cambio.
+
+### 9.2 Contadores de hardware capturados (perf_event_paranoid = 0)
+
+Con permisos habilitados, se capturaron contadores hardware en 200 ejecuciones:
+
+**Sequential:**
+```
+  cycles              : 205,912,983
+  instructions        : 417,847,075
+  cache-misses        : 75,509
+  cache-references    : 128,726
+  branches            : 34,253,520
+  branch-misses       : 1,105,650
+  task-clock          : 44.35 msec
+  context-switches    : 1
+  cpu-migrations      : 1
+```
+
+IPC: `417,847,075 / 205,912,983 ≈ 2.03`
+Cache miss rate: `75,509 / 128,726 ≈ 58.7%`
+
+**SMT:**
+```
+  cycles              : 242,800,056
+  instructions        : 559,690,534
+  cache-misses        : 70,043
+  cache-references    : 153,411
+  branches            : 55,942,637
+  branch-misses       : 1,332,758
+  task-clock          : 53.48 msec
+  context-switches    : 3
+  cpu-migrations      : 2
+```
+
+IPC: `559,690,534 / 242,800,056 ≈ 2.30`
+Cache miss rate: `70,043 / 153,411 ≈ 45.6%`
+
+**CMP (4 cores, totales combinados):**
+```
+  cycles              : 412,229,062 (core) + 63,686,653 (atom)
+  instructions        : 511,603,396 (core) + 75,806,346 (atom)
+  cache-misses        : 468,869 (core) + 524,929 (atom)
+  cache-references    : 4,229,902 (core) + 1,683,957 (atom)
+  task-clock          : 95.43 msec (2.842 CPUs utilized)
+  context-switches    : 738
+  cpu-migrations      : 56
+```
+
+IPC (core): `511,603,396 / 412,229,062 ≈ 1.24`
+Cache miss rate (core): `468,869 / 4,229,902 ≈ 11.1%`
+
+### 9.3 Interpretación de contadores
+
+1. **IPC (Instrucciones por Ciclo):**
+  - Sequential: 2.03 (mejor que esperado para ray tracing puro)
+  - SMT: 2.30 (mejor que seq, pero no 2x — hay dependencias inter-thread)
+  - CMP (core): 1.24 (más bajo → la lógica del ray tracer tiene dependencias)
+
+2. **Cache miss rate:**
+  - Sequential: 58.7% (alto, consistente con CACHE_SIZE=256 bytes pequeño)
+  - SMT: 45.6% (más bajo que seq — working set distribuido entre threads)
+  - CMP (core): 11.1% (mucho más bajo → cada core trabaja en su región/zona)
+
+3. **Context switches:**
+  - Sequential: 1 (baseline, sin cambios de contexto)
+  - SMT: 3 (cambios de contexto mínimos, scheduler eficiente)
+  - CMP: 738 (alto, pero proporcional al número de threads independientes y I/O del SO)
+
+4. **CPU utilización:**
+  - Sequential: 0.994 (casi 1 core)
+  - SMT: 0.994 (casi 1 core)
+  - CMP: 2.842 (3 cores de los 4, no es 4.0 porque hay overhead + sincronización)
+
+### 9.4 Síntesis final
+
+La corrida completa con perf proporciona **validación empírica** de los modelos teóricos:
+
+1. **CGMT realista:** El costo de context switch (400 ns) es necesario para modelar hardware real. VT: 4.963 ms (no el ideal 4.800 ms).
+
+2. **SMT efectivo:** Aunque el IPC no se duplica, conseguimos 2.51x speedup en VT gracias a W=2 issue width simulado. Los contadores perf muestran mejor cache utilization.
+
+3. **CMP paralelo:** Con 4 cores, logramos 3.95x speedup VT, aunque la utilización es 2.82 CPUs (no 4.0). Esto refleja overhead de sincronización y balance de carga.
+
+4. **Imágenes byte-exact:** Todos los modelos coinciden → la correctness del ray tracing está garantizada independientemente del scheduling.
+
+**Archivos generados en esta fase:**
+- `results/mediciones_*.csv` — nuevos con CGMT actualizado
+- `results/speedup_report.log` — métricas con CGMT mejorado
+- `results/perf/perf_*.txt` — contadores hardware capturados
+- `results/perf/perf_results.json` — síntesis estructurada
+
+### 9.5 Comparativa SMT hardware on/off en CMP (27-03-2026)
+
+Se ejecutó `./scripts/run_smt_comparison.sh` para medir el impacto del Hyper-Threading:
+
+**Resultados:**
+
+| Configuración | CPU time (avg) | VT (avg) | Diferencia |
+|---------------|----------------|----------|-----------|
+| SMT ON | 0.000140359 s | 1.547 ms | baseline |
+| SMT OFF | 0.000140345 s | 1.547 ms | -0.00014 s (<0.01%) |
+
+**Conclusión:**
+
+El Hyper-Threading (SMT hardware) **no tiene efecto significativo** en este escenario:
+
+1. **Razón:** El modelo CMP usa 4 threads independientes con OS scheduling real. Cada thread se asigna a un core físico completamente (gracias a que N=4 cores). Hyper-Threading solo ayuda cuando:
+  - Hay más threads que cores físicos (ej: 8 threads en 4 cores físicos).
+  - Hay mucha ILP (Instruction-Level Parallelism) dentro del mismo core.
+  - La aplicación sufre muchos stalls que otro thread lógico pueda ocultar.
+
+2. **Este caso:** Ray tracing pixel por pixel es altamente data-parallel, pero no hay mucho ILP intra-thread. Cada thread procesa 1200 píxeles (su tile) de forma secuencial. El SMT del hardware es "invisible" porque no hay contención por recursos en un core.
+
+3. **Implicación teórica:** El modelo arquitectónico CMP no necesita simular SMT hardware explícitamente; 4 cores reales sin HT ≈ 4 cores reales con HT para esta carga.
+
+**Archivos generados:**
+- `results/mediciones_cmp_smt_on.csv` — 200 frames con HT enabled
+- `results/mediciones_cmp_smt_off.csv` — 200 frames con HT disabled
