@@ -39,8 +39,7 @@ private:
     std::vector<trace::ThreadMetrics> thread_stats;
 
     struct ThreadTile {
-        int x_start, x_end;
-        int y_start, y_end;
+        int start, end;    // Rango lineal de píxeles [start, end)
         int thread_id;
     };
     std::vector<ThreadTile> tiles;

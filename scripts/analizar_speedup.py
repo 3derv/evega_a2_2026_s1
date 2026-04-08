@@ -565,57 +565,80 @@ def generate_graphs(stats, graphs_dir):
             plt.savefig(f"{graphs_dir}/07_efficiency.png", dpi=300)
             plt.close()
 
-    # ── 8. Escalabilidad: N vs Speedup ───────────────────────────────────────
-    # Curva ideal = speedup lineal (S = N).  Puntos reales muestran cuánto se
-    # acerca cada modelo al ideal de Amdahl para fracción paralela ≈ 1.
-    if 'sequential' in stats:
-        seq_vt_avg = vt_mean_ms(stats['sequential'])
-        seq_cpu_m  = stats['sequential']['mean']
-        scale_pts  = [(1, 1.0, 'sequential', colors.get('sequential', 'royalblue'), 'baseline')]
-        for lbl in labels:
-            if lbl == 'sequential':
-                continue
-            n = THREAD_COUNT.get(lbl, 1)
-            if lbl in PERF_MODELS:
-                sp = seq_cpu_m / stats[lbl]['mean'] if stats[lbl]['mean'] > 0 else 0
-                kind = 'real'
-            else:
-                vm = vt_mean_ms(stats[lbl])
-                sp = seq_vt_avg / vm if vm > 0 else 0
-                kind = 'modeled'
-            scale_pts.append((n, sp, lbl, colors.get(lbl, 'slategray'), kind))
+    # ── 8. Escalabilidad: Speedup VT vs Threads (datos de experiments_scaling) ──
+    # Lee el summary.csv más reciente de experiments_scaling para graficar
+    # speedup VT de cada modelo conforme aumentan los hilos/contextos.
+    import csv as csv_mod
+    scaling_dir = Path(graphs_dir).resolve().parent / 'experiments_scaling'
+    scaling_summary = None
+    if scaling_dir.is_dir():
+        # Buscar el directorio de experimento más reciente (nombre = timestamp)
+        subdirs = sorted(
+            [d for d in scaling_dir.iterdir() if d.is_dir() and (d / 'summary.csv').exists()],
+            key=lambda d: d.name, reverse=True
+        )
+        if subdirs:
+            scaling_summary = subdirs[0] / 'summary.csv'
 
-        if len(scale_pts) > 1:
-            n_max = max(p[0] for p in scale_pts)
-            n_rng = np.linspace(1, n_max * 1.2, 120)
+    if scaling_summary and scaling_summary.exists():
+        # Leer summary.csv en estructura: {(model, threads): vt_avg_ns}
+        sweep_data = {}  # model -> [(threads, vt_avg_ns), ...]
+        with open(scaling_summary) as sf:
+            reader = csv_mod.DictReader(sf)
+            for row in reader:
+                model = row['model']
+                th = int(row['threads'])
+                vt = float(row['vt_avg_ns'])
+                sweep_data.setdefault(model, []).append((th, vt))
+
+        # Calcular speedup: para cada thread count, speedup = seq_vt / model_vt
+        seq_by_threads = {}
+        if 'sequential' in sweep_data:
+            for th, vt in sweep_data['sequential']:
+                seq_by_threads[th] = vt
+
+        if seq_by_threads:
             fig, ax = plt.subplots(figsize=(10, 6))
+            n_max = max(seq_by_threads.keys())
+            n_rng = np.linspace(1, n_max * 1.1, 100)
             ax.plot(n_rng, n_rng, 'k--', linewidth=1.5, alpha=0.4, label='Ideal S = N')
-            for n_pt, sp_pt, lbl_pt, c_pt, kind_pt in scale_pts:
-                marker = 'D' if kind_pt == 'baseline' else (
-                         'o' if kind_pt == 'real' else 's')
-                ax.scatter(n_pt, sp_pt, color=c_pt, s=170, zorder=5, marker=marker)
-                offset = (8, 6) if lbl_pt != 'sequential' else (8, -16)
-                ax.annotate(f'{lbl_pt.upper()}\n{sp_pt:.2f}x',
-                            (n_pt, sp_pt), textcoords='offset points',
-                            xytext=offset, fontsize=9, color=c_pt, fontweight='bold')
+
+            model_order = ['fgmt', 'cgmt', 'smt', 'cmp']
+            markers = {'fgmt': 's', 'cgmt': '^', 'smt': 'o', 'cmp': 'D'}
+
+            for model in model_order:
+                if model not in sweep_data:
+                    continue
+                pts = sorted(sweep_data[model], key=lambda p: p[0])
+                threads_list = []
+                speedups = []
+                for th, vt in pts:
+                    if th in seq_by_threads and vt > 0:
+                        threads_list.append(th)
+                        speedups.append(seq_by_threads[th] / vt)
+                if threads_list:
+                    c = colors.get(model, 'slategray')
+                    ax.plot(threads_list, speedups, marker=markers.get(model, 'o'),
+                            color=c, linewidth=2, markersize=8, label=model.upper(), zorder=5)
+                    for t, s in zip(threads_list, speedups):
+                        ax.annotate(f'{s:.2f}x', (t, s), textcoords='offset points',
+                                    xytext=(6, 8), fontsize=8, color=c, fontweight='bold')
+
             ax.set_xlabel('Número de Hilos / Contextos (N)', fontweight='bold')
-            ax.set_ylabel('Speedup vs Sequential', fontweight='bold')
-            ax.set_title('Escalabilidad: Speedup en función de N',
+            ax.set_ylabel('Speedup VT vs Sequential', fontweight='bold')
+            ax.set_title('Escalabilidad: Speedup VT en función de N',
                          fontweight='bold')
-            ax.set_xlim(0, n_max * 1.35)
-            y_top = max(p[1] for p in scale_pts)
-            ax.set_ylim(0, max(y_top, float(n_max)) * 1.25)
+            ax.set_xlim(0, n_max * 1.25)
+            y_top = n_max  # al menos la línea ideal
+            for model in model_order:
+                if model in sweep_data:
+                    for th, vt in sweep_data[model]:
+                        if th in seq_by_threads and vt > 0:
+                            y_top = max(y_top, seq_by_threads[th] / vt)
+            ax.set_ylim(0, max(y_top, float(n_max)) * 1.2)
+            ax.set_xticks(sorted(seq_by_threads.keys()))
             ax.grid(True, alpha=0.3)
-            from matplotlib.lines import Line2D
-            legend_elems = [
-                Line2D([0], [0], marker='o', color='w', markerfacecolor='gray',
-                       markersize=10, label='Real (CPU wall-clock)'),
-                Line2D([0], [0], marker='s', color='w', markerfacecolor='gray',
-                       markersize=10, label='Simulado (Tiempo Virtual)'),
-                Line2D([0], [0], linestyle='--', color='k', alpha=0.4,
-                       label='Speedup ideal = N'),
-            ]
-            ax.legend(handles=legend_elems)
+            ax.legend(loc='upper left')
             plt.tight_layout()
             plt.savefig(f"{graphs_dir}/08_scalability.png", dpi=300)
             plt.close()
@@ -899,28 +922,42 @@ def main():
         lines.append(SEP2)
         lines.append("")
 
-    # ── Escalabilidad ─────────────────────────────────────────────────────
+    # ── Escalabilidad VT ─────────────────────────────────────────────────
     if 'sequential' in stats:
         lines.append(SEP2)
-        lines.append("ESCALABILIDAD  (Speedup real vs Speedup ideal = N)")
+        lines.append("ESCALABILIDAD VT  (Speedup real vs Speedup ideal = N)")
         lines.append(SEP2)
         lines.append("  S_ideal = N (Amdahl con fracción paralela = 1).")
-        lines.append(f"  {'Modelo':<12} {'N':<5} {'S_real':<12} {'S_ideal':<12} {'E=S/N':<10} {'Tipo'}")
-        lines.append(f"  {'-'*12} {'-'*4} {'-'*11} {'-'*11} {'-'*9} {'-'*10}")
+        lines.append(f"  {'Modelo':<12} {'N':<5} {'S_real':<12} {'S_ideal':<12} {'E=S/N':<10}")
+        lines.append(f"  {'-'*12} {'-'*4} {'-'*11} {'-'*11} {'-'*9}")
         for name, s in stats.items():
             n = THREAD_COUNT.get(name, 1)
             if name == 'sequential':
-                lines.append(f"  {'SEQUENTIAL':<12} {1:<5} {'1.0000':<12} {'1.0000':<12} {'1.0000':<10} baseline")
+                lines.append(f"  {'SEQUENTIAL':<12} {1:<5} {'1.0000':<12} {'1.0000':<12} {'1.0000':<10}")
                 continue
-            if name in PERF_MODELS:
-                sp   = seq_cpu_m2 / s['mean'] if s['mean'] > 0 else 0
-                tipo = "real"
-            else:
-                vm_ns = s['vt_mean']
-                sp   = (seq_vt_m2 / vm_ns) if (seq_vt_m2 and vm_ns and vm_ns > 0) else 0
-                tipo = "simulado"
+            vm_ns = s['vt_mean']
+            sp = (seq_vt_m2 / vm_ns) if (seq_vt_m2 and vm_ns and vm_ns > 0) else 0
             eff = sp / n if n > 0 else 0
-            lines.append(f"  {name.upper():<12} {n:<5} {sp:<12.4f} {float(n):<12.4f} {eff:<10.4f} {tipo}")
+            lines.append(f"  {name.upper():<12} {n:<5} {sp:<12.4f} {float(n):<12.4f} {eff:<10.4f}")
+        lines.append(SEP2)
+        lines.append("")
+
+    # ── Escalabilidad CPU ─────────────────────────────────────────────────
+    if 'sequential' in stats:
+        lines.append(SEP2)
+        lines.append("ESCALABILIDAD CPU  (Speedup real vs Speedup ideal = N)")
+        lines.append(SEP2)
+        lines.append("  S_ideal = N (Amdahl con fracción paralela = 1).")
+        lines.append(f"  {'Modelo':<12} {'N':<5} {'S_real':<12} {'S_ideal':<12} {'E=S/N':<10}")
+        lines.append(f"  {'-'*12} {'-'*4} {'-'*11} {'-'*11} {'-'*9}")
+        for name, s in stats.items():
+            n = THREAD_COUNT.get(name, 1)
+            if name == 'sequential':
+                lines.append(f"  {'SEQUENTIAL':<12} {1:<5} {'1.0000':<12} {'1.0000':<12} {'1.0000':<10}")
+                continue
+            sp = seq_cpu_m2 / s['mean'] if s['mean'] > 0 else 0
+            eff = sp / n if n > 0 else 0
+            lines.append(f"  {name.upper():<12} {n:<5} {sp:<12.4f} {float(n):<12.4f} {eff:<10.4f}")
         lines.append(SEP2)
         lines.append("")
 
