@@ -7,15 +7,17 @@
 #   3. Guardar y establecer CPU governor = performance
 #   4. Guardar y bajar perf_event_paranoid a 0
 #   5. Ejecutar los 5 modelos con perf stat (200 frames cada uno)
-#   6. Ejecutar comparativa SMT ON vs OFF (modelo CMP)
-#   7. Restaurar CPU governor original
-#   8. Restaurar perf_event_paranoid original
-#   9. Mostrar resumen de todos los artefactos generados
+#   6. Thread sweep 1-8 hilos para gráfica de escalabilidad (graph 08)
+#   7. Ejecutar comparativa SMT ON vs OFF (modelo CMP)
+#   8. Restaurar CPU governor original
+#   9. Restaurar perf_event_paranoid original
+#   10. Mostrar resumen de todos los artefactos generados
 #
-# Uso: ./run_full_experiment.sh [--skip-smt-comparison] [--skip-fgmt]
+# Uso: ./run_full_experiment.sh [--skip-smt-comparison] [--skip-fgmt] [--skip-thread-sweep]
 #
 # --skip-smt-comparison  Omite run_smt_comparison.sh (no requiere hardware físico)
-# --skip-fgmt            Pasa --skip-fgmt a run_all_models.sh (ahorra ~102s)
+# --skip-fgmt            Pasa --skip-fgmt a run_all_models.sh y thread sweep
+# --skip-thread-sweep    Omite el sweep de threads 1-8 (ahorra tiempo)
 #
 # NOTA: Requiere sudo para controlar perf_event_paranoid y CPU governor.
 #       En WSL2 los contadores hardware perf pueden no estar disponibles.
@@ -35,10 +37,12 @@ PARANOID_FILE="/proc/sys/kernel/perf_event_paranoid"
 GOVERNOR_DIR="/sys/devices/system/cpu/cpu0/cpufreq"
 
 SKIP_SMT_COMP=false
+SKIP_THREAD_SWEEP=false
 EXTRA_ARGS=()
 for arg in "$@"; do
     case "$arg" in
         --skip-smt-comparison) SKIP_SMT_COMP=true ;;
+        --skip-thread-sweep)   SKIP_THREAD_SWEEP=true ;;
         --skip-fgmt)           EXTRA_ARGS+=("--skip-fgmt") ;;
         --skip-smt)            EXTRA_ARGS+=("--skip-smt") ;;
     esac
@@ -90,6 +94,7 @@ echo "╚═══════════════════════�
 echo ""
 [[ "${#EXTRA_ARGS[@]}" -gt 0 ]] && echo "  ⚠ Flags adicionales a run_all_models.sh: ${EXTRA_ARGS[*]}"
 [[ "$SKIP_SMT_COMP" = true ]] && echo "  ⚠ Comparativa SMT ON/OFF omitida (--skip-smt-comparison)"
+[[ "$SKIP_THREAD_SWEEP" = true ]] && echo "  ⚠ Thread sweep 1-8 omitido (--skip-thread-sweep)"
 echo ""
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -235,7 +240,7 @@ echo ""
 # ─────────────────────────────────────────────────────────────────────────────
 # Paso 5 — Ejecutar los 5 modelos con perf stat
 # ─────────────────────────────────────────────────────────────────────────────
-echo "[5/9] Ejecutando los 5 modelos con medición de VT y perf stat..."
+echo "[5/10] Ejecutando los 5 modelos con medición de VT y perf stat..."
 echo ""
 
 "$SCRIPTS_DIR/run_all_models.sh" --with-perf "${EXTRA_ARGS[@]}"
@@ -243,24 +248,76 @@ echo ""
 echo ""
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Paso 6 — Comparativa SMT ON vs OFF
+# Paso 6 — Thread sweep 1-8 para gráfica de escalabilidad
+# ─────────────────────────────────────────────────────────────────────────────
+echo ""
+if [[ "$SKIP_THREAD_SWEEP" = false ]]; then
+    echo "[6/10] Ejecutando thread sweep (1-8 hilos, todos los modelos)..."
+    echo "       Esto recompila para cada conteo de threads."
+    echo ""
+
+    # Construir lista de modelos según flags --skip-*
+    SWEEP_MODELS="sequential,cgmt"
+    SKIP_FGMT_FLAG=false
+    SKIP_SMT_FLAG=false
+    SKIP_CMP_FLAG=false
+    for ea in "${EXTRA_ARGS[@]}"; do
+        case "$ea" in
+            --skip-fgmt) SKIP_FGMT_FLAG=true ;;
+            --skip-smt)  SKIP_SMT_FLAG=true ;;
+            --skip-cmp)  SKIP_CMP_FLAG=true ;;
+        esac
+    done
+    [[ "$SKIP_FGMT_FLAG" = false ]] && SWEEP_MODELS="$SWEEP_MODELS,fgmt"
+    [[ "$SKIP_SMT_FLAG"  = false ]] && SWEEP_MODELS="$SWEEP_MODELS,smt"
+    [[ "$SKIP_CMP_FLAG"  = false ]] && SWEEP_MODELS="$SWEEP_MODELS,cmp"
+
+    python3 "$SCRIPTS_DIR/run_scalability_matrix.py" \
+        --project-root "$PROJECT_ROOT" \
+        --sizes "80x60" \
+        --threads "1,2,3,4,5,6,7,8" \
+        --models "$SWEEP_MODELS" \
+        --smt-states "on" \
+        --skip-perf || {
+        echo "  ⚠ Thread sweep falló — graph 08 puede no tener datos completos"
+    }
+
+    # Regenerar gráfica 08 (escalabilidad) con los datos frescos del sweep
+    echo "  Regenerando gráfica 08_scalability.png con datos del sweep..."
+    CSV_REGEN=()
+    for csv in "$RESULTS_DIR"/mediciones_*.csv; do
+        [[ -f "$csv" ]] && CSV_REGEN+=("$csv")
+    done
+    python3 "$SCRIPTS_DIR/analizar_speedup.py" \
+        "${CSV_REGEN[@]}" \
+        --graphs "$RESULTS_DIR/graficas" \
+        --log "$RESULTS_DIR/speedup_report.log" 2>/dev/null && \
+        echo "  ✓ Gráfica 08_scalability.png regenerada" || \
+        echo "  ⚠ No se pudo regenerar la gráfica 08"
+else
+    echo "[6/10] ⚠ Thread sweep omitido (--skip-thread-sweep)"
+fi
+echo ""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Paso 7 — Comparativa SMT ON vs OFF
 # ─────────────────────────────────────────────────────────────────────────────
 echo ""
 if [[ "$SKIP_SMT_COMP" = false ]]; then
-    echo "[6/9] Ejecutando comparativa SMT (Hyper-Threading) ON vs OFF..."
+    echo "[7/10] Ejecutando comparativa SMT (Hyper-Threading) ON vs OFF..."
     echo ""
     "$SCRIPTS_DIR/run_smt_comparison.sh" || {
         echo "  ⚠ run_smt_comparison.sh terminó con error (puede ser WSL2/VM — continúa)"
     }
 else
-    echo "[6/9] ⚠ Comparativa SMT ON/OFF omitida por flag --skip-smt-comparison"
+    echo "[7/10] ⚠ Comparativa SMT ON/OFF omitida por flag --skip-smt-comparison"
 fi
 echo ""
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Paso 7 — Restaurar CPU governor
+# Paso 8 — Restaurar CPU governor
 # ─────────────────────────────────────────────────────────────────────────────
-echo "[7/9] Restaurando CPU governor..."
+echo "[8/10] Restaurando CPU governor..."
 # La restauración real ocurre en el trap EXIT. Aquí solo se reporta el estado.
 if [[ -n "$ORIGINAL_GOVERNOR" && "$ORIGINAL_GOVERNOR" != "performance" ]]; then
     NCPUS=$(nproc)
@@ -280,9 +337,9 @@ fi
 echo ""
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Paso 8 — Restaurar perf_event_paranoid
+# Paso 9 — Restaurar perf_event_paranoid
 # ─────────────────────────────────────────────────────────────────────────────
-echo "[8/9] Restaurando perf_event_paranoid..."
+echo "[9/10] Restaurando perf_event_paranoid..."
 if [[ -n "$ORIGINAL_PARANOID" && -f "$PARANOID_FILE" ]]; then
     CURRENT=$(cat "$PARANOID_FILE")
     if [[ "$CURRENT" != "$ORIGINAL_PARANOID" ]]; then
@@ -298,9 +355,9 @@ fi
 echo ""
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Paso 9 — Resumen completo de artefactos
+# Paso 10 — Resumen completo de artefactos
 # ─────────────────────────────────────────────────────────────────────────────
-echo "[9/9] ╔══════════════════════════════════════════════════════════════╗"
+echo "[10/10] ╔══════════════════════════════════════════════════════════════╗"
 echo "       ║  EXPERIMENTO COMPLETADO — ARTEFACTOS GENERADOS              ║"
 echo "       ╚══════════════════════════════════════════════════════════════╝"
 echo ""
