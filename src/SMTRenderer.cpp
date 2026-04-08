@@ -31,6 +31,7 @@ SMTRenderer::SMTRenderer()
     pixel_idx_.resize(SMT_NUM_THREADS, 0);
     stall_countdown_.resize(SMT_NUM_THREADS, 0);
     thread_finished_.resize(SMT_NUM_THREADS, false);
+    pending_stall_.resize(SMT_NUM_THREADS, false);
 }
 
 // render_pixel: función auxiliar que produce el color de un píxel completo.
@@ -71,6 +72,7 @@ std::vector<Vector3> SMTRenderer::render_frame() {
         pixel_idx_[i]       = tasks_[i].start;
         stall_countdown_[i] = 0;
         thread_finished_[i] = false;
+        pending_stall_[i]   = false;
     }
     global_clock_ = 0;
 
@@ -104,17 +106,19 @@ std::vector<Vector3> SMTRenderer::render_frame() {
             int x  = px % IMAGE_WIDTH;
             int y  = px / IMAGE_WIDTH;
 
-            if (cache_models_[tid].is_cache_miss(x, y)) {
+            if (!pending_stall_[tid] && cache_models_[tid].is_cache_miss(x, y)) {
                 // MISS: thread eyectado. El slot sigue disponible para el
                 // siguiente thread listo (el bucle continúa hacia attempt+1).
                 // El stall queda oculto: 0 VT desperdiciado por este hilo.
                 thread_stats_[tid].cache_misses++;
                 stall_countdown_[tid] = CACHE_MISS_PENALTY_NS / PIXEL_QUANTUM_NS;
-                logger_.log_stall(global_clock_, tid, x, y, 0LL, "miss\u2192ejected");
+                pending_stall_[tid] = true;
+                logger_.log_stall(global_clock_, tid, x, y, 0LL, "miss→ejected");
             } else {
-                // HIT: slot ocupado productivamente.
+                // HIT (o dato ya en cache tras stall): slot ocupado productivamente.
                 frame_[px] = render_pixel(scene_, x, y, camera_pos_);
                 thread_stats_[tid].virtual_time_ns += PIXEL_QUANTUM_NS;
+                pending_stall_[tid] = false;
                 logger_.log_compute(global_clock_, tid, x, y, PIXEL_QUANTUM_NS);
                 pixel_idx_[tid]++;
                 if (pixel_idx_[tid] >= tasks_[tid].end) {

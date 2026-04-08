@@ -68,7 +68,7 @@ public:
         return "Usage: ./raytracer [--model MODEL] [--runs N] [--verbose N]\n"
                "Models available: sequential, fgmt, cgmt, smt, cmp\n"
                "Options:\n"
-               "  --verbose N   Imprimir los primeros N ciclos del scheduler (solo SMT)\n"
+               "  --verbose N   Imprimir los primeros N ciclos del scheduler (todos los modelos)\n"
                "Example: ./raytracer --model smt --runs 1 --verbose 30\n";
     }
 };

@@ -2,7 +2,6 @@
 #include "Constants.h"
 #include "Ray.h"
 #include "RendererUtils.h"
-#include <cmath>
 
 using namespace constants;
 using namespace trace;
@@ -12,26 +11,15 @@ FinegrainedRenderer::FinegrainedRenderer()
 
     tiles.resize(NUM_THREADS);
 
-    // Grilla 2D derivada de NUM_THREADS: ncols = sqrt(N), nrows = N/ncols.
-    // Para NUM_THREADS=4 → ncols=2, nrows=2 (misma grilla 2×2 que antes).
-    // Si NUM_THREADS cambia a, p. ej., 1 o 2, la grilla se recalcula.
-    // Las celdas de la última columna/fila usan IMAGE_WIDTH/IMAGE_HEIGHT como
-    // borde derecho/inferior, absorbiendo píxeles sobrantes cuando la imagen
-    // no es divisible exactamente entre ncols o nrows.
-    const int ncols  = std::max(1, static_cast<int>(std::round(std::sqrt(static_cast<double>(NUM_THREADS)))));
-    const int nrows  = NUM_THREADS / ncols;
-    const int base_w = IMAGE_WIDTH  / ncols;
-    const int base_h = IMAGE_HEIGHT / nrows;
+    //  cada thread recorre una banda contigua del frame en orden raster. Garantiza el mismo patrón de acceso
+    const int total_pixels    = IMAGE_WIDTH * IMAGE_HEIGHT;
+    const int pixels_per_thread = total_pixels / NUM_THREADS;
 
-    for (int r = 0; r < nrows; ++r) {
-        for (int c = 0; c < ncols; ++c) {
-            int tid = r * ncols + c;
-            int xs  = c * base_w;
-            int xe  = (c == ncols - 1) ? IMAGE_WIDTH  : xs + base_w;
-            int ys  = r * base_h;
-            int ye  = (r == nrows - 1) ? IMAGE_HEIGHT : ys + base_h;
-            tiles[tid] = {xs, xe, ys, ye, tid};
-        }
+    for (int i = 0; i < NUM_THREADS; ++i) {
+        tiles[i].start     = i * pixels_per_thread;
+        tiles[i].end       = (i == NUM_THREADS - 1) ? total_pixels
+                                                     : (i + 1) * pixels_per_thread;
+        tiles[i].thread_id = i;
     }
 
     cache_models.resize(NUM_THREADS);
@@ -61,8 +49,8 @@ void FinegrainedRenderer::render_tile_worker(int thread_id) {
     CacheModel&       cache = cache_models[thread_id];
     const ThreadTile& tile  = tiles[thread_id];
 
-    int x = tile.x_start;
-    int y = tile.y_start;
+    int pixel_idx = tile.start;
+    bool pending_stall = false;  // true = ya se pagó el stall, no re-consultar cache
 
     while (true) {
         sem_wait(&slots_[thread_id]);
@@ -73,26 +61,29 @@ void FinegrainedRenderer::render_tile_worker(int thread_id) {
         // Capturar ciclo global antes de procesar: serializado por el semáforo.
         const int cycle = global_cycle_.fetch_add(1, std::memory_order_relaxed);
 
-        // Ciclo de pipeline: este thread tiene píxeles pendientes
-        if (cache.is_cache_miss(x, y)) {
+        const int x = pixel_idx % IMAGE_WIDTH;
+        const int y = pixel_idx / IMAGE_WIDTH;
+
+        // Ciclo de pipeline: determinar miss solo una vez por píxel.
+        // Si pending_stall es true, el stall ya se pagó en el turno anterior
+        // y este turno el dato ya está en cache → proceder como HIT.
+        if (!pending_stall && cache.is_cache_miss(x, y)) {
             // STALL: el slot se ocupa con un NOP de duración PIXEL_QUANTUM_NS.
             // El slot fue gastado pero no produjo un píxel → el quantum completo
-            // se desperdicia. El píxel se reintentará en el próximo turno.
-            // Costo = PIXEL_QUANTUM_NS (igual que un compute, pero sin avanzar).
-            // Comparar con CGMT: allí el stall cuesta 0 porque el slot es cedido
-            // de inmediato a otro thread que sí hace trabajo.
+            // se desperdicia. El píxel se renderizará en el próximo turno.
             stats.virtual_time_ns += PIXEL_QUANTUM_NS;
             stats.cache_misses++;
+            pending_stall = true;
             logger_.log_stall(cycle, thread_id, x, y, PIXEL_QUANTUM_NS, "slot wasted");
         } else {
             // COMPUTE: renderizar pixel y avanzar al siguiente
             frame[y * IMAGE_WIDTH + x] = scene.trace(make_ray(x, y, camera_pos_));
             stats.virtual_time_ns += PIXEL_QUANTUM_NS;
             logger_.log_compute(cycle, thread_id, x, y, PIXEL_QUANTUM_NS);
+            pending_stall = false;
 
-            x++;
-            if (x >= tile.x_end) { x = tile.x_start; y++; }
-            if (y >= tile.y_end) {
+            pixel_idx++;
+            if (pixel_idx >= tile.end) {
                 logger_.log_done(cycle, thread_id);
                 tile_done_[thread_id].store(true, std::memory_order_release);
                 int done = threads_completed_.fetch_add(1, std::memory_order_acq_rel) + 1;

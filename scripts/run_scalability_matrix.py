@@ -129,12 +129,12 @@ def update_constants(constants_path: Path, width: int, height: int, threads: int
     constants_path.write_text(text, encoding="utf-8")
 
 
-def set_hw_smt(state: str, smt_ctrl: Path) -> None:
+def set_hw_smt(state: str, smt_ctrl: Path) -> bool:
+    """Intenta cambiar el estado SMT hardware. Retorna True si tuvo éxito."""
     proc = run_cmd(["sudo", "-n", "bash", "-lc", f"echo {state} > {smt_ctrl}"])
     if proc.returncode != 0:
-        raise RuntimeError(
-            "No se pudo cambiar SMT hardware sin prompt. Ejecuta primero: sudo -v"
-        )
+        return False
+    return True
 
 
 def get_hw_smt(smt_ctrl: Path) -> str:
@@ -461,10 +461,13 @@ def main() -> int:
         for smt_state in smt_states:
             if smt_ctrl.exists():
                 print(f"[INFO] Cambiando SMT hardware a: {smt_state}")
-                set_hw_smt(smt_state, smt_ctrl)
+                if not set_hw_smt(smt_state, smt_ctrl):
+                    print(f"[WARN] No se pudo fijar SMT={smt_state} (WSL2/VM). Saltando estado.")
+                    continue
                 now = get_hw_smt(smt_ctrl)
                 if now != smt_state:
-                    raise RuntimeError(f"No se pudo fijar SMT={smt_state}, estado actual={now}")
+                    print(f"[WARN] SMT={smt_state} no se aplicó (actual={now}). Saltando estado.")
+                    continue
             else:
                 print("[WARN] SMT control no disponible; se continua con estado unico")
 

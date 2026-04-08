@@ -83,6 +83,7 @@ private:
     std::vector<int>  pixel_idx_;       // píxel actual de cada thread
     std::vector<int>  stall_countdown_; // ciclos restantes de stall (0 = listo)
     std::vector<bool> thread_finished_; // tile completado
+    std::vector<bool> pending_stall_;   // true = stall pagado, no re-consultar cache
 
     SchedulerLogger logger_; // Traza ciclo-a-ciclo (activar con set_verbose)
 };

@@ -63,6 +63,7 @@ void CoarseRenderer::render_worker(int thread_id) {
     ThreadMetrics& stats = thread_stats[thread_id];
 
     int pixel_idx = task.start;
+    bool pending_stall = false;  // true = stall pagado, no re-consultar cache
 
     while (true) {
         std::unique_lock<std::mutex> lock(sched_mutex);
@@ -81,7 +82,9 @@ void CoarseRenderer::render_worker(int thread_id) {
         int x = pixel_idx % IMAGE_WIDTH;
         int y = pixel_idx / IMAGE_WIDTH;
 
-        if (cache.is_cache_miss(x, y)) {
+        // Determinar miss solo una vez por píxel.
+        // Si pending_stall, el dato ya volvió de memoria → proceder como HIT.
+        if (!pending_stall && cache.is_cache_miss(x, y)) {
             // ── STALL DETECTADO → CAMBIO DE CONTEXTO CON COSTO ────────────
             // CGMT prevé el stall y cede el slot al siguiente thread activo
             // ANTES de desperdiciar el ciclo de latencia (CACHE_MISS_PENALTY_NS).
@@ -94,6 +97,7 @@ void CoarseRenderer::render_worker(int thread_id) {
             // reintentará el mismo píxel (puede que ya esté en cache).
             stats.cache_misses++;
             stats.virtual_time_ns += CONTEXT_SWITCH_COST_NS;
+            pending_stall = true;
             switch_to_next_thread();
             const int cycle = global_clock_++;
             const std::string note = "ctx switch→T" + std::to_string(current_thread);
@@ -103,6 +107,7 @@ void CoarseRenderer::render_worker(int thread_id) {
             // Renderizar pixel y avanzar al siguiente de este tile
             frame[pixel_idx] = scene.trace(make_ray(x, y, camera_pos_));
             stats.virtual_time_ns += PIXEL_QUANTUM_NS;
+            pending_stall = false;
             const int cycle = global_clock_++;
             logger_.log_compute(cycle, thread_id, x, y, PIXEL_QUANTUM_NS);
             pixel_idx++;

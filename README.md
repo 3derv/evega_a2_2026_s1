@@ -47,6 +47,7 @@ lo que hace los resultados reproducibles y comparables entre máquinas.
 │   ├── perf_to_json.py          # Convierte perf_*.txt → perf_results.json
 │   ├── run_smt_comparison.sh    # CMP con SMT hardware ON vs OFF
 │   ├── run_scalability_matrix.py/sh  # Matriz de escalabilidad N × configuración
+│   ├── run_thread_sweep.py      # Sweep de hilos N=2..8 para escalabilidad
 │   ├── make_gif_sequential.sh   # GIF animación sequential
 │   └── make_gif_cmp.sh          # GIF animación CMP
 ├── results/
@@ -79,7 +80,7 @@ cmake --build build/ -j4
 ./build/raytracer --model cgmt
 ./build/raytracer --model smt
 ./build/raytracer --model cmp
-./build/raytracer --model smt --verbose 30  # log ciclo a ciclo (solo SMT)
+./build/raytracer --model smt --verbose 30  # log ciclo a ciclo (todos los modelos)
 ./build/raytracer --help
 ```
 
@@ -103,8 +104,10 @@ Genera en `results/`:
 | `mediciones_*.csv` | 200 mediciones por modelo (frames de animación) |
 | `speedup_report.log` | Speedup, IC95%, eficiencia paralela, escalabilidad, CPI |
 | `image/frame_*.ppm` | Frame de referencia por modelo (deben ser byte-exactas) |
-| `graficas/01_histogram_comparativo.png` | Histograma de VT por frame, eje X compartido |
-| `graficas/02_boxplot_comparativo.png` | Boxplot VT — todos los modelos |
+| `graficas/01_histogram_comparativo_gmt.png` | Histograma VT agrupado: FGMT vs CGMT |
+| `graficas/01_histogram_comparativo_s-cmp.png` | Histograma VT agrupado: SMT vs CMP |
+| `graficas/02_boxplot_comparativo_gmt.png` | Boxplot VT agrupado: FGMT vs CGMT |
+| `graficas/02_boxplot_comparativo_s-cmp.png` | Boxplot VT agrupado: SMT vs CMP |
 | `graficas/03_speedup_comparison.png` | Speed Up VT vs Sequential con IC95% |
 | `graficas/04_timeline_executions.png` | VT por frame (animación 200 frames) |
 | `graficas/05_virtual_time_comparison.png` | VT promedio: escala completa |
@@ -138,7 +141,29 @@ echo on  | sudo tee /sys/devices/system/cpu/smt/control   # activar HT
 cat /sys/devices/system/cpu/smt/control                   # estado actual
 ```
 
-### 6. Perfilado con `perf stat`
+### 6. Sweep de escalabilidad (N hilos)
+
+Barre N=2..8 hilos, recompilando con cada N, y genera `results/thread_sweep.csv`
+para graficar speedup y eficiencia en función del número de contextos/cores.
+
+```bash
+python3 scripts/run_thread_sweep.py          # sweep completo
+python3 scripts/run_thread_sweep.py --max-n 4 # limitar a N=4
+```
+
+### 7. Matriz de escalabilidad
+
+Ejecuta combinaciones de N × configuración (cache size, issue width) para
+explorar el espacio de diseño. Guarda resultados con timestamp en
+`results/experiments_scaling/`.
+
+```bash
+python3 scripts/run_scalability_matrix.py
+# o con el wrapper bash:
+./scripts/run_scalability_matrix.sh
+```
+
+### 8. Perfilado con `perf stat`
 
 Captura contadores de hardware (cycles, instructions, cache-misses, branch-misses)
 para correlacionar con los modelos de ejecución.
@@ -194,6 +219,23 @@ Ver [docs/analisis_tecnico.md](docs/analisis_tecnico.md) para el análisis teór
 - **DIP** — `GenericRunner` y `main.cpp` dependen únicamente de `IRenderer*`; nunca de concretos.
 - **SRP** — `switch_to_next_thread()` (CGMT) extrae la lógica del scheduler en su propio método; `Exporter` es responsable exclusivo de rutas y E/S.
 - **DRY** — `make_ray()` en `Ray.h` compartida por todos los renderers. `reset_thread_stats()` y `sum_virtual_times()` en `RendererUtils.h` eliminan duplicación entre FGMT, CGMT y CMP.
+
+## Personalización de parámetros
+
+Todas las constantes del framework se centralizan en `include/Constants.h`.
+Para experimentar con distintas configuraciones basta editar ese archivo y recompilar:
+
+```bash
+# Ejemplo: duplicar el tamaño de cache y reducir la resolución
+# Editar include/Constants.h:
+#   CACHE_SIZE = 512
+#   IMAGE_WIDTH = 40, IMAGE_HEIGHT = 30
+cmake --build build/ -j4
+```
+
+Parámetros ajustables: `IMAGE_WIDTH`, `IMAGE_HEIGHT`, `NUM_FRAMES`,
+`CACHE_SIZE`, `PIXEL_QUANTUM_NS`, `CACHE_MISS_PENALTY_NS`,
+`CMP_NUM_CORES`, `SMT_ISSUE_WIDTH`.
 
 ## Cómo agregar un nuevo modelo
 
