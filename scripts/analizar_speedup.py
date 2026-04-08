@@ -227,69 +227,160 @@ def generate_graphs(stats, graphs_dir):
             return s['vt_mean'] / 1e6
         return s['mean'] * 1e3
 
+    def pair_axis_limits(series_list):
+        combined = np.concatenate(series_list)
+        data_min = float(combined.min())
+        data_max = float(combined.max())
+        spread = data_max - data_min
+        if spread < 1e-6:
+            center = float(combined.mean())
+            pad = max(center * 0.01, 0.001)
+            return center - pad, center + pad
+        pad = max(spread * 0.2, 0.001)
+        return data_min - pad, data_max + pad
+
+    def pair_hist_bins(series_list, x_lo, x_hi):
+        combined = np.concatenate(series_list)
+        span = x_hi - x_lo
+        if span <= 0:
+            return np.linspace(x_lo - 0.001, x_hi + 0.001, 9)
+        if len(combined) < 2:
+            return np.linspace(x_lo, x_hi, 9)
+        q25, q75 = np.percentile(combined, [25, 75])
+        iqr = q75 - q25
+        if iqr > 0:
+            bin_width = 2 * iqr * (len(combined) ** (-1 / 3))
+            if bin_width > 0:
+                n_bins = int(np.ceil(span / bin_width))
+            else:
+                n_bins = 12
+        else:
+            n_bins = 12
+        n_bins = int(np.clip(n_bins, 8, 24))
+        return np.linspace(x_lo, x_hi, n_bins + 1)
+
+    def series_axis_limits(vt):
+        data_min = float(vt.min())
+        data_max = float(vt.max())
+        spread = data_max - data_min
+        if spread < 1e-9:
+            center = float(vt.mean())
+            pad = max(center * 0.005, 0.0005)
+            return center - pad, center + pad
+        pad = max(spread * 0.08, 0.0005)
+        return data_min - pad, data_max + pad
+
+    def series_hist_bins(vt, x_lo, x_hi):
+        span = x_hi - x_lo
+        unique_count = len(np.unique(vt))
+        if span <= 0 or unique_count <= 1:
+            return np.linspace(x_lo - 0.0005, x_hi + 0.0005, 10)
+        n_bins = int(np.clip(max(12, unique_count), 12, 36))
+        return np.linspace(x_lo, x_hi, n_bins + 1)
+
     vt_all  = [vt_series(stats[l]) for l in labels]
     vt_avgs = [vt_mean_ms(stats[l]) for l in labels]
 
-    # Rango global de VT para compartir eje X en histogramas
+    # Rango global de VT para boxplot y comparativas generales.
     vt_global_min = min(v.min() for v in vt_all)
     vt_global_max = max(v.max() for v in vt_all)
     vt_margin     = max((vt_global_max - vt_global_min) * 0.1, 0.001)
 
-    # ── 1. Histograma de tiempo virtual por frame — eje X compartido ─────────
-    # Eje X idéntico en todos los subplots para comparación visual directa.
-    fig, axes = plt.subplots(1, len(labels), figsize=(6 * len(labels), 6),
-                             sharey=False)
-    if len(labels) == 1:
-        axes = [axes]
-    for ax, lbl, vt, c in zip(axes, labels, vt_all, clr):
-        # Si la varianza es casi cero (FGMT, SMT), usar 1 bin para evitar
-        # artefactos; de lo contrario 25 bins.
-        n_bins = 1 if vt.std() < 1e-6 else 25
-        ax.hist(vt, bins=n_bins, color=c, alpha=0.75, edgecolor='black')
-        ic_h = 1.96 * vt.std(ddof=1) / np.sqrt(len(vt)) if len(vt) > 1 else 0
-        ax.axvline(vt.mean(), color='black', linestyle='--', linewidth=1.5,
-                   label=(f'μ={vt.mean():.3f} ms\n'
-                          f'σ={vt.std(ddof=1):.4f} ms\n'
-                          f'IC95=[{vt.mean()-ic_h:.3f}, {vt.mean()+ic_h:.3f}]'))
-        ax.set_xlim(vt_global_min - vt_margin, vt_global_max + vt_margin)
-        ax.set_title(lbl.upper(), fontweight='bold', fontsize=13)
-        ax.set_xlabel('Tiempo Virtual por frame (ms)', fontsize=10)
-        ax.set_ylabel('Frecuencia (frames)', fontsize=10)
-        ax.legend(fontsize=9)
-        ax.grid(True, alpha=0.3)
-    plt.suptitle('Distribución del Tiempo Virtual por Frame — por Modelo\n'
-                 '(eje X compartido para comparación directa)',
-                 fontweight='bold', fontsize=13)
-    plt.tight_layout()
-    plt.savefig(f"{graphs_dir}/01_histogram_comparativo.png", dpi=300, bbox_inches='tight')
-    plt.close()
+    # ── 1. Histogramas VT por pares comparables ──────────────────────────────
+    # Se generan como archivos independientes para facilitar su uso en el paper.
+    pair_specs = []
+    if all(model in stats for model in ('fgmt', 'cgmt')):
+        pair_specs.append(('FGMT vs CGMT', ['fgmt', 'cgmt'], '01_histogram_comparativo_gmt.png'))
+    if all(model in stats for model in ('smt', 'cmp')):
+        pair_specs.append(('SMT vs CMP', ['smt', 'cmp'], '01_histogram_comparativo_s-cmp.png'))
+    if not pair_specs:
+        pair_specs.append(('Comparación disponible', labels[:min(len(labels), 2)],
+                           '01_histogram_comparativo.png'))
 
-    # ── 2. Boxplot de tiempo virtual — eje Y acotado ──────────────────────────
-    # Y empieza cerca del mínimo para amplificar diferencias entre modelos.
-    fig, ax = plt.subplots(figsize=(10, 7))
-    bp = ax.boxplot(vt_all, labels=[l.upper() for l in labels],
-                    patch_artist=True, widths=0.5)
-    for patch, c in zip(bp['boxes'], clr):
-        patch.set_facecolor(c)
-        patch.set_alpha(0.7)
-    # Anotar mediana de cada caja
-    for i, (med_line, lbl) in enumerate(zip(bp['medians'], labels), start=1):
-        med_val = med_line.get_ydata()[0]
-        ax.text(i, med_val, f'  {med_val:.3f}', va='center',
-                fontsize=9, fontweight='bold', color='black')
-    y_lo = vt_global_min - vt_margin * 3
-    y_hi = vt_global_max + vt_margin * 3
-    ax.set_ylim(y_lo, y_hi)
-    ax.set_ylabel('Tiempo Virtual por frame (ms)', fontweight='bold')
-    ax.set_title('Distribución del Tiempo Virtual por Frame\n'
-                 '(eje Y acotado — mismo quantum y costo de stall para todos)',
-                 fontweight='bold')
-    ax.grid(True, alpha=0.3, axis='y')
-    ax.annotate('⚠ Eje Y no empieza en 0', xy=(0.01, 0.02),
-                xycoords='axes fraction', fontsize=9, color='gray')
-    plt.tight_layout()
-    plt.savefig(f"{graphs_dir}/02_boxplot_comparativo.png", dpi=300)
-    plt.close()
+    for title, pair_labels, filename in pair_specs:
+        fig, axes = plt.subplots(1, len(pair_labels), figsize=(7 * len(pair_labels), 5.5),
+                                 sharex=False, sharey=False)
+        if len(pair_labels) == 1:
+            axes = [axes]
+
+        for ax, lbl in zip(axes, pair_labels):
+            vt = vt_series(stats[lbl])
+            color = colors.get(lbl, 'slategray')
+            x_lo, x_hi = series_axis_limits(vt)
+            bins = series_hist_bins(vt, x_lo, x_hi)
+            ic_h = 1.96 * vt.std(ddof=1) / np.sqrt(len(vt)) if len(vt) > 1 else 0
+            ax.hist(vt, bins=bins, color=color, alpha=0.55, edgecolor='black',
+                    linewidth=0.8, label=(f'μ={vt.mean():.3f} ms | '
+                                           f'σ={vt.std(ddof=1):.4f} ms'))
+            ax.axvline(vt.mean(), color=color, linestyle='--', linewidth=2)
+            ax.axvspan(vt.mean() - ic_h, vt.mean() + ic_h, color=color, alpha=0.10)
+            ax.set_xlim(x_lo, x_hi)
+            ax.set_title(lbl.upper(), fontweight='bold', fontsize=13)
+            ax.set_xlabel('Tiempo virtual por frame (ms)', fontsize=10)
+            ax.set_ylabel('Frecuencia (frames)', fontsize=10)
+            ax.legend(fontsize=9)
+            ax.grid(True, alpha=0.3)
+
+        plt.suptitle(title, fontweight='bold', fontsize=13)
+        plt.tight_layout()
+        plt.savefig(f"{graphs_dir}/{filename}", dpi=300, bbox_inches='tight')
+        plt.close()
+
+    # ── 2. Boxplots VT por pares comparables ──────────────────────────────────
+    # Se agrupan igual que los histogramas para comparar familias afines.
+    boxplot_specs = []
+    for title, pair_labels, hist_filename in pair_specs:
+        if hist_filename == '01_histogram_comparativo_gmt.png':
+            boxplot_filename = '02_boxplot_comparativo_gmt.png'
+        elif hist_filename == '01_histogram_comparativo_s-cmp.png':
+            boxplot_filename = '02_boxplot_comparativo_s-cmp.png'
+        else:
+            boxplot_filename = '02_boxplot_comparativo.png'
+        boxplot_specs.append((title, pair_labels, boxplot_filename))
+
+    generated_hist_files = {filename for _, _, filename in pair_specs}
+    generated_boxplot_files = {filename for _, _, filename in boxplot_specs}
+    stale_outputs = []
+    if '01_histogram_comparativo.png' not in generated_hist_files:
+        stale_outputs.append('01_histogram_comparativo.png')
+    if '02_boxplot_comparativo.png' not in generated_boxplot_files:
+        stale_outputs.append('02_boxplot_comparativo.png')
+    for stale_name in stale_outputs:
+        stale_path = Path(graphs_dir) / stale_name
+        if stale_path.exists():
+            stale_path.unlink()
+
+    for title, pair_labels, filename in boxplot_specs:
+        pair_vt = [vt_series(stats[lbl]) for lbl in pair_labels]
+        pair_colors = [colors.get(lbl, 'slategray') for lbl in pair_labels]
+
+        fig, axes = plt.subplots(1, len(pair_labels), figsize=(6 * len(pair_labels), 5.5),
+                                 sharex=False, sharey=False)
+        if len(pair_labels) == 1:
+            axes = [axes]
+
+        for ax, lbl, vt, color in zip(axes, pair_labels, pair_vt, pair_colors):
+            series_min = float(vt.min())
+            series_max = float(vt.max())
+            series_margin = max((series_max - series_min) * 0.1, 0.001)
+
+            bp = ax.boxplot([vt], labels=[lbl.upper()], patch_artist=True, widths=0.45)
+            bp['boxes'][0].set_facecolor(color)
+            bp['boxes'][0].set_alpha(0.7)
+
+            med_val = bp['medians'][0].get_ydata()[0]
+            ax.text(1, med_val, f'  {med_val:.3f}', va='center',
+                    fontsize=9, fontweight='bold', color='black')
+
+            ax.set_ylim(series_min - series_margin * 3, series_max + series_margin * 3)
+            ax.set_ylabel('Tiempo Virtual por frame (ms)', fontweight='bold')
+            ax.set_title(lbl.upper(), fontweight='bold', fontsize=13)
+            ax.grid(True, alpha=0.3, axis='y')
+
+        plt.suptitle(title, fontweight='bold', fontsize=13)
+        plt.tight_layout()
+        plt.savefig(f"{graphs_dir}/{filename}", dpi=300, bbox_inches='tight')
+        plt.close()
 
     # ── 3. Speed Up en tiempo virtual vs sequential ───────────────────────────
     # Y acotado cerca de 1.0 para que diferencias del 0.x% sean visibles.
@@ -328,13 +419,9 @@ def generate_graphs(stats, graphs_dir):
                        label='Sequential (baseline = 1.0000×)')
             ax.set_ylim(max(0.98, sp_min - sp_margin), sp_max + sp_margin * 4)
             ax.set_ylabel('Speed Up en Tiempo Virtual (vs Sequential)', fontweight='bold')
-            ax.set_title('Speed Up — Reloj Virtual\n'
-                         '(eje Y acotado · independiente del scheduler del OS)',
-                         fontweight='bold')
+            ax.set_title('Speed Up — Reloj Virtual', fontweight='bold')
             ax.grid(True, alpha=0.3, axis='y')
             ax.legend()
-            ax.annotate('⚠ Eje Y no empieza en 0', xy=(0.01, 0.02),
-                        xycoords='axes fraction', fontsize=9, color='gray')
             plt.tight_layout()
             plt.savefig(f"{graphs_dir}/03_speedup_comparison.png", dpi=300)
             plt.close()
@@ -354,13 +441,10 @@ def generate_graphs(stats, graphs_dir):
     ax.set_ylim(y_lo2, y_hi2)
     ax.set_xlabel('Frame #', fontweight='bold')
     ax.set_ylabel('Tiempo Virtual por frame (ms)', fontweight='bold')
-    ax.set_title('Tiempo Virtual por frame — Animación 200 frames\n'
-                 '(eje Y acotado · línea discontinua = promedio)',
+    ax.set_title('Tiempo Virtual por frame — Animación 200 frames',
                  fontweight='bold')
     ax.legend(loc='upper left')
     ax.grid(True, alpha=0.3)
-    ax.annotate('⚠ Eje Y no empieza en 0', xy=(0.01, 0.02),
-                xycoords='axes fraction', fontsize=9, color='gray')
     plt.tight_layout()
     plt.savefig(f"{graphs_dir}/04_timeline_executions.png", dpi=300)
     plt.close()
@@ -383,9 +467,7 @@ def generate_graphs(stats, graphs_dir):
                      f'{v:.3f} ms', ha='center', va='bottom',
                      fontsize=11, fontweight='bold')
     ax_full.set_ylabel('Tiempo Virtual promedio por frame (ms)', fontweight='bold')
-    ax_full.set_title('Tiempo Virtual promedio por modelo\n'
-                      '(escala completa — mismo quantum · mismo costo de stall)',
-                      fontweight='bold')
+    ax_full.set_title('Tiempo Virtual promedio por modelo', fontweight='bold')
     ax_full.set_ylim(0, max(vt_avgs) * 1.12)
     ax_full.grid(True, alpha=0.3, axis='y')
 
@@ -399,8 +481,7 @@ def generate_graphs(stats, graphs_dir):
                    label_txt, ha='center', va='bottom',
                    fontsize=11, fontweight='bold')
     ax_oh.set_ylabel('Overhead sobre mínimo VT (μs)', fontweight='bold')
-    ax_oh.set_title('Overhead de Tiempo Virtual respecto al modelo más rápido\n'
-                    '(μs — diferencias reales de los ciclos de stall no ocultos)',
+    ax_oh.set_title('Overhead de Tiempo Virtual respecto al modelo más rápido',
                     fontweight='bold')
     ax_oh.set_ylim(0, max(overhead_us) * 1.35 if max(overhead_us) > 0 else 1)
     ax_oh.grid(True, alpha=0.3, axis='y')
@@ -433,8 +514,7 @@ def generate_graphs(stats, graphs_dir):
             ax.axhline(1.0, color='royalblue', linestyle='--', linewidth=2,
                        label='Sequential (baseline = 1×)')
             ax.set_ylabel('Speed Up Tiempo CPU (vs Sequential)', fontweight='bold')
-            ax.set_title('Speed Up Tiempo CPU — Modelos SMT/CMP\n'
-                         '(throughput real · I/O excluido del timer)',
+            ax.set_title('Speed Up Tiempo CPU — Modelos SMT/CMP',
                          fontweight='bold')
             ax.set_ylim(0, max(max(cpu_speedups, default=1.0), 1.5) * 1.3)
             ax.grid(True, alpha=0.3, axis='y')
@@ -477,9 +557,7 @@ def generate_graphs(stats, graphs_dir):
             ax.axhline(1.0, color='gray', linestyle='--', linewidth=1.8,
                        label='Eficiencia ideal = 1.0 (100%)')
             ax.set_ylabel('Eficiencia Paralela  E = Speedup / N', fontweight='bold')
-            ax.set_title('Eficiencia Paralela por Modelo\n'
-                         '(FGMT/CGMT: VT · SMT/CMP: CPU wall-clock)',
-                         fontweight='bold')
+            ax.set_title('Eficiencia Paralela por Modelo', fontweight='bold')
             ax.set_ylim(0, max(max(eff_values, default=1.0), 1.05) * 1.30)
             ax.grid(True, alpha=0.3, axis='y')
             ax.legend()
@@ -522,8 +600,7 @@ def generate_graphs(stats, graphs_dir):
                             xytext=offset, fontsize=9, color=c_pt, fontweight='bold')
             ax.set_xlabel('Número de Hilos / Contextos (N)', fontweight='bold')
             ax.set_ylabel('Speedup vs Sequential', fontweight='bold')
-            ax.set_title('Escalabilidad: Speedup en función de N\n'
-                         '(● real CPU  ■ simulado VT  ◆ baseline sequential)',
+            ax.set_title('Escalabilidad: Speedup en función de N',
                          fontweight='bold')
             ax.set_xlim(0, n_max * 1.35)
             y_top = max(p[1] for p in scale_pts)
@@ -562,8 +639,8 @@ def generate_graphs(stats, graphs_dir):
             mv = med_line.get_ydata()[0]
             ax_bp.text(i, mv, f' {mv:.3f}', va='center', fontsize=9, fontweight='bold')
         ax_bp.set_ylabel('Tiempo Virtual por frame (ms)', fontweight='bold')
-        ax_bp.set_title('Distribución VT — Modelos Simulados\n(pipeline compartido)',
-                        fontweight='bold')
+        ax_bp.set_title('Distribución VT — Modelos Simulados',
+                fontweight='bold')
         ax_bp.grid(True, alpha=0.3, axis='y')
 
         if 'sequential' in MODELED_GROUP:
@@ -584,8 +661,7 @@ def generate_graphs(stats, graphs_dir):
             ax_sp.grid(True, alpha=0.3, axis='y')
             ax_sp.legend()
 
-        plt.suptitle('Comparativa Modelos Simulados (Pipeline Compartido)',
-                     fontweight='bold', fontsize=14)
+        plt.suptitle('Comparativa Modelos Simulados', fontweight='bold', fontsize=14)
         plt.tight_layout()
         plt.savefig(f"{graphs_dir}/09_modeled_group_comparison.png", dpi=300,
                     bbox_inches='tight')
@@ -610,8 +686,8 @@ def generate_graphs(stats, graphs_dir):
             mv = med_line.get_ydata()[0]
             ax_bp2.text(i, mv, f' {mv:.3f}', va='center', fontsize=9, fontweight='bold')
         ax_bp2.set_ylabel('Tiempo CPU por frame (ms)', fontweight='bold')
-        ax_bp2.set_title('Distribución CPU — Modelos Reales\n(wall-clock · I/O excluido)',
-                         fontweight='bold')
+        ax_bp2.set_title('Distribución CPU — Modelos Reales',
+                 fontweight='bold')
         ax_bp2.grid(True, alpha=0.3, axis='y')
 
         if 'sequential' in REAL_GROUP:
@@ -632,8 +708,7 @@ def generate_graphs(stats, graphs_dir):
             ax_sp2.grid(True, alpha=0.3, axis='y')
             ax_sp2.legend()
 
-        plt.suptitle('Comparativa Modelos Reales (Paralelismo Hardware)',
-                     fontweight='bold', fontsize=14)
+        plt.suptitle('Comparativa Modelos Reales', fontweight='bold', fontsize=14)
         plt.tight_layout()
         plt.savefig(f"{graphs_dir}/10_real_group_comparison.png", dpi=300,
                     bbox_inches='tight')

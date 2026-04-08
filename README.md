@@ -103,8 +103,10 @@ Genera en `results/`:
 | `mediciones_*.csv` | 200 mediciones por modelo (frames de animación) |
 | `speedup_report.log` | Speedup, IC95%, eficiencia paralela, escalabilidad, CPI |
 | `image/frame_*.ppm` | Frame de referencia por modelo (deben ser byte-exactas) |
-| `graficas/01_histogram_comparativo.png` | Histograma de VT por frame, eje X compartido |
-| `graficas/02_boxplot_comparativo.png` | Boxplot VT — todos los modelos |
+| `graficas/01_histogram_comparativo_gmt.png` | Histograma VT agrupado: FGMT vs CGMT |
+| `graficas/01_histogram_comparativo_s-cmp.png` | Histograma VT agrupado: SMT vs CMP |
+| `graficas/02_boxplot_comparativo_gmt.png` | Boxplot VT agrupado: FGMT vs CGMT |
+| `graficas/02_boxplot_comparativo_s-cmp.png` | Boxplot VT agrupado: SMT vs CMP |
 | `graficas/03_speedup_comparison.png` | Speed Up VT vs Sequential con IC95% |
 | `graficas/04_timeline_executions.png` | VT por frame (animación 200 frames) |
 | `graficas/05_virtual_time_comparison.png` | VT promedio: escala completa |
